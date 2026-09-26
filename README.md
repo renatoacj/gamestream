@@ -9,6 +9,12 @@
   Eles só abrem um link no navegador. Não precisa de conta, de servidor nem de abrir portas.
 </p>
 
+<p align="center">
+  <a href="https://github.com/renatoacj/gamestream/releases/latest"><img src="https://img.shields.io/github/v/release/renatoacj/gamestream?label=download&color=7c5cff" alt="Download"></a>
+  <img src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4" alt="Windows 10 | 11">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/licen%C3%A7a-MIT-green" alt="Licença MIT"></a>
+</p>
+
 ---
 
 ## Recursos
@@ -23,6 +29,8 @@
 - **Seguro por padrão**: o servidor só escuta em `localhost`, e o link tem uma chave aleatória nova a cada execução.
 
 ## Instalar
+
+**[⬇ Baixar o instalador (última versão)](https://github.com/renatoacj/gamestream/releases/latest)**
 
 Baixe o `GameStream-Setup-x.y.z.exe` e execute. Não precisa ser administrador nem instalar o .NET, porque ele já vem embutido.
 
