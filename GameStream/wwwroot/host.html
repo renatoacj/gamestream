@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>GameStream</title>
+<link rel="icon" href="favicon.png">
+<link rel="stylesheet" href="style.css">
+<style>
+  body { display: grid; grid-template-columns: 1fr 320px; height: 100vh; }
+  main { display: flex; flex-direction: column; padding: 16px; gap: 12px; min-width: 0; overflow-y: auto; }
+  header { display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 18px; margin: 0; flex: 1; }
+  .preview {
+    flex: 1 1 280px; min-height: 220px; background: #000; border: 1px solid var(--border);
+    border-radius: 12px; overflow: hidden; position: relative;
+  }
+  .preview iframe { width: 100%; height: 100%; border: 0; display: block; }
+  .preview .empty { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; color: var(--muted); padding: 24px; }
+
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .row .grow { flex: 1; min-width: 240px; }
+  .row select.grow { width: 100%; }
+  #message { font-size: 13px; min-height: 18px; }
+  #message.error { color: var(--live); white-space: pre-wrap; }
+
+  .settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+  fieldset {
+    border: 1px solid var(--border); border-radius: 10px; background: var(--panel);
+    padding: 10px 12px 12px; margin: 0; min-width: 0;
+  }
+  legend { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; padding: 0 6px; }
+  .field { display: grid; grid-template-columns: 1fr 140px; align-items: center; gap: 8px; margin-top: 8px; }
+  .field > span { color: var(--muted); font-size: 13px; }
+  .field select, .field input[type=number] { width: 100%; }
+  .field input[type=number] {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px;
+  }
+  .field input[type=checkbox] { justify-self: start; accent-color: var(--accent); width: 16px; height: 16px; }
+  .hint { font-size: 11.5px; color: var(--muted); margin-top: 8px; }
+
+  aside { background: var(--panel); border-left: 1px solid var(--border); padding: 16px; overflow-y: auto; }
+  aside h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 18px 0 8px; }
+  aside h2:first-child { margin-top: 0; }
+  .link {
+    display: flex; gap: 6px; align-items: center; background: var(--panel-2);
+    border: 1px solid var(--border); border-radius: 8px; padding: 6px 6px 6px 10px; margin-bottom: 6px;
+  }
+  .link code { flex: 1; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .link button { padding: 4px 10px; font-size: 12px; }
+  .stat { display: flex; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .stat b { font-variant-numeric: tabular-nums; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tips { font-size: 12.5px; color: var(--muted); padding-left: 18px; margin: 0; }
+  .tips li { margin-bottom: 6px; }
+
+  .link-tools { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 4px; }
+  .link-tools button { font-size: 12px; padding: 5px 10px; }
+  .link-tools label { color: var(--muted); font-size: 12px; display: flex; gap: 6px; align-items: center; }
+  .link-tools select { padding: 4px 6px; font-size: 12px; }
+
+  /* Botão da fonte escolhida */
+  .source-btn { display: flex; align-items: center; gap: 10px; text-align: left; padding: 6px 12px 6px 6px; min-height: 48px; }
+  .source-btn img { width: 64px; height: 36px; object-fit: cover; border-radius: 4px; background: #000; flex: none; }
+  .source-btn span { display: flex; flex-direction: column; min-width: 0; }
+  .source-btn b, .source-btn small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .source-btn small { color: var(--muted); font-size: 12px; }
+
+  /* Medidor de áudio */
+  .meter-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+  .meter { flex: 1; height: 8px; border-radius: 4px; background: var(--panel-2); border: 1px solid var(--border); overflow: hidden; }
+  #meterFill { height: 100%; width: 0; background: var(--ok); transition: width .08s linear; }
+  #meterFill.hot { background: var(--warn); }
+  #meterFill.clip { background: var(--live); }
+  #meterDb { font-size: 12px; color: var(--muted); width: 56px; text-align: right; font-variant-numeric: tabular-nums; }
+
+  /* Janela de escolha com miniaturas */
+  dialog#picker {
+    width: min(960px, 92vw); max-height: 86vh; padding: 0; border: 1px solid var(--border);
+    border-radius: 14px; background: var(--panel); color: var(--text);
+  }
+  dialog#picker::backdrop { background: rgba(0, 0, 0, .6); }
+  .picker-head { display: flex; align-items: center; gap: 8px; padding: 12px; border-bottom: 1px solid var(--border); }
+  .tabs { display: flex; gap: 4px; flex: 1; }
+  .tab { background: transparent; border-color: transparent; }
+  .tab.active { background: var(--panel-2); border-color: var(--accent); }
+  .picker-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px;
+    padding: 12px; overflow-y: auto; max-height: calc(86vh - 64px);
+  }
+  .card {
+    display: flex; flex-direction: column; gap: 6px; padding: 8px; text-align: left;
+    background: var(--panel-2); border: 2px solid transparent; border-radius: 10px;
+  }
+  .card:hover { border-color: var(--border); }
+  .card.selected { border-color: var(--accent); }
+  .card .thumb { aspect-ratio: 16 / 9; background: #000; border-radius: 6px; display: grid; place-items: center; overflow: hidden; color: var(--muted); font-size: 12px; }
+  .card .thumb img { width: 100%; height: 100%; object-fit: contain; }
+  .card b { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card small { color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>🎮 GameStream</h1>
+    <span id="liveBadge" class="badge"><span class="dot"></span><span id="liveText">OFFLINE</span></span>
+  </header>
+
+  <div class="preview">
+    <iframe id="preview" hidden title="Prévia"></iframe>
+    <div id="empty" class="empty"><div>Escolha a janela do jogo e clique em <b>Iniciar transmissão</b>.</div></div>
+  </div>
+
+  <div class="row">
+    <input type="hidden" id="source">
+    <button id="sourceBtn" class="grow source-btn" title="Escolher o que transmitir">
+      <img id="sourceThumb" alt="" hidden>
+      <span><b id="sourceName">Escolher janela ou monitor…</b><small id="sourceDetail"></small></span>
+    </button>
+    <button id="startBtn" class="primary">▶ Iniciar transmissão</button>
+    <button id="stopBtn" class="danger" hidden>■ Parar</button>
+  </div>
+  <div id="message" class="muted"></div>
+
+  <div class="row">
+    <span class="muted">Predefinição:</span>
+    <select id="profilePreset">
+      <option value="">Personalizado</option>
+      <option value="quality">Qualidade — 1080p 60 fps, GPU</option>
+      <option value="balanced">Equilibrado — 900p 60 fps, GPU</option>
+      <option value="stable30">Estável — 720p 30 fps fixos, GPU</option>
+      <option value="cpu">CPU — 720p 30 fps fixos, x264</option>
+      <option value="light">Internet fraca — 540p 30 fps, 2,5 Mbps</option>
+    </select>
+  </div>
+
+  <div class="settings">
+    <fieldset>
+      <legend>Vídeo</legend>
+      <label class="field"><span>Resolução de saída</span>
+        <select id="height" data-setting>
+          <option value="0">Original</option>
+          <option value="1440">1440p</option>
+          <option value="1080">1080p</option>
+          <option value="900">900p</option>
+          <option value="720">720p</option>
+          <option value="540">540p</option>
+        </select>
+      </label>
+      <label class="field"><span>FPS</span>
+        <select id="fps" data-setting>
+          <option value="60">60</option>
+          <option value="48">48</option>
+          <option value="30">30</option>
+          <option value="24">24</option>
+        </select>
+      </label>
+      <label class="field" title="Repete o último quadro quando o jogo não entrega um novo a tempo: o espectador vê um ritmo constante.">
+        <span>FPS constante</span><input type="checkbox" id="constantFps" data-setting>
+      </label>
+      <label class="field"><span>Mostrar cursor</span><input type="checkbox" id="cursor" data-setting></label>
+      <div class="hint">A redução de resolução é feita na placa de vídeo, mantendo a proporção da tela.</div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Codificação</legend>
+      <label class="field"><span>Codificador</span>
+        <select id="encoder" data-setting>
+          <option value="auto">Automático (GPU)</option>
+          <option value="nvenc">NVIDIA NVENC</option>
+          <option value="amf">AMD AMF</option>
+          <option value="qsv">Intel Quick Sync</option>
+          <option value="x264">CPU (x264)</option>
+        </select>
+      </label>
+      <label class="field"><span>Controle de taxa</span>
+        <select id="rateControl" data-setting>
+          <option value="cbr">CBR (constante)</option>
+          <option value="vbr">VBR (variável)</option>
+        </select>
+      </label>
+      <label class="field"><span>Bitrate (kbps)</span>
+        <input type="number" id="bitrateKbps" min="500" max="50000" step="500" data-setting>
+      </label>
+      <label class="field"><span>Preset</span>
+        <select id="preset" data-setting>
+          <option value="speed">Velocidade</option>
+          <option value="balanced">Equilibrado</option>
+          <option value="quality">Qualidade</option>
+        </select>
+      </label>
+      <label class="field"><span>Quadro-chave a cada</span>
+        <select id="keyframeSeconds" data-setting>
+          <option value="0.5">0,5 s</option>
+          <option value="1">1 s</option>
+          <option value="2">2 s</option>
+        </select>
+      </label>
+      <label class="field"><span>Perfil H.264</span>
+        <select id="profile" data-setting>
+          <option value="high">High</option>
+          <option value="main">Main</option>
+        </select>
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Áudio</legend>
+      <label class="field"><span>Fonte</span>
+        <select id="audioMode" data-setting>
+          <option value="window">Só da janela escolhida</option>
+          <option value="system">Todo o som do PC</option>
+          <option value="none">Sem áudio</option>
+        </select>
+      </label>
+      <label class="field"><span>Bitrate (kbps)</span>
+        <select id="audioKbps" data-setting>
+          <option value="96">96</option>
+          <option value="128">128</option>
+          <option value="160">160</option>
+          <option value="192">192</option>
+          <option value="256">256</option>
+        </select>
+      </label>
+      <label class="field" title="Aumenta o volume enviado. Um limitador evita distorção quando o som fica alto demais.">
+        <span>Ganho</span>
+        <select id="audioGainDb" data-setting>
+          <option value="0">0 dB</option>
+          <option value="3">+3 dB</option>
+          <option value="6">+6 dB</option>
+          <option value="9">+9 dB</option>
+          <option value="12">+12 dB</option>
+        </select>
+      </label>
+      <div class="meter-row">
+        <div class="meter" title="Nível do áudio enviado"><div id="meterFill"></div></div>
+        <span id="meterDb">—</span>
+      </div>
+      <div class="hint">"Só da janela" pega o som apenas do programa escolhido (Windows 11). Com um monitor, usa todo o som do PC. Ideal: medidor chegando no amarelo nas partes altas.</div>
+    </fieldset>
+  </div>
+</main>
+
+<aside>
+  <h2>🌍 Link para os amigos</h2>
+  <div id="links"><span class="muted">Carregando…</span></div>
+  <div class="link-tools">
+    <button id="rotateBtn" title="Cria um endereço novo e desconecta todos que estão assistindo">🔄 Gerar novo link</button>
+    <label title="Máximo de pessoas assistindo ao mesmo tempo">Limite
+      <select id="maxViewers">
+        <option>3</option><option>5</option><option selected>10</option><option>20</option><option>50</option>
+      </select>
+    </label>
+  </div>
+  <div class="hint">Só quem tem o link consegue assistir, e ninguém controla seu PC por ele. Se o link vazar, gere um novo.</div>
+
+  <h2>Status</h2>
+  <div class="stat"><span>Espectadores</span><b id="viewerCount">0</b></div>
+  <div class="stat"><span>Transmitindo</span><b id="sourceOut">—</b></div>
+  <div class="stat"><span>Resolução</span><b id="sizeOut">—</b></div>
+  <div class="stat"><span>Quadros enviados</span><b id="fpsOut">—</b></div>
+  <div class="stat"><span>Bitrate do vídeo</span><b id="kbpsOut">—</b></div>
+  <div class="stat"><span>Codificador</span><b id="encoderOut">—</b></div>
+  <div class="stat"><span>Áudio</span><b id="audioOut">—</b></div>
+
+  <h2>Dicas</h2>
+  <ul class="tips">
+    <li>Mande o link acima. Seus amigos abrem no Chrome, Edge ou Safari, sem instalar nada.</li>
+    <li>Cada espectador usa o bitrate escolhido do seu upload. Com 8 Mbps e 3 amigos são ~24 Mbps.</li>
+    <li>Travando? Use <b>720p</b>, <b>30 fps</b> e <b>FPS constante</b>. Em CPU, a resolução é o que mais pesa.</li>
+    <li>A <b>GPU</b> codifica num chip separado da placa e quase não afeta o jogo.</li>
+  </ul>
+</aside>
+
+<dialog id="picker">
+  <div class="picker-head">
+    <div class="tabs">
+      <button class="tab active" data-kind="window">Janelas</button>
+      <button class="tab" data-kind="monitor">Monitores</button>
+    </div>
+    <button id="pickerRefresh" title="Atualizar lista e imagens">⟳ Atualizar</button>
+    <button id="pickerClose" title="Fechar">✕</button>
+  </div>
+  <div id="pickerGrid" class="picker-grid"></div>
+</dialog>
+
+<script src="host.js"></script>
+</body>
+</html>
