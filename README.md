@@ -72,11 +72,11 @@ Para recriar o ícone: `powershell -ExecutionPolicy Bypass -File tools/make-icon
 ┌──────────────────────────── GameStream.exe ─────────────────────────────┐
 │  ffmpeg: gfxcapture (janela/monitor, GPU) → NVENC/AMF/QSV/x264 → H.264  │
 │  WASAPI process loopback (só o jogo) → Opus (Concentus)                 │
-│        └────────────► Kestrel (localhost:8790): repassa p/ cada amigo  │
+│        └────────────► Kestrel (localhost:8790): repassa p/ cada amigo   │
 │  WebView2 (host.html): interface e prévia                               │
 └───────────────────────────────────────────────┬─────────────────────────┘
-                                                 │ cloudflared (Quick Tunnel)
-                                                 ▼
+                                                │ cloudflared (Quick Tunnel)
+                                                ▼
          https://xxxx.trycloudflare.com/?k=…  →  navegador do amigo
                                                  (WebCodecs → canvas)
 ```
