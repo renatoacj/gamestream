@@ -330,13 +330,21 @@ function showMessage(text, kind = 'muted') {
   $('message').hidden = !text;   // sem mensagem, não ocupa espaço
 }
 
+let refreshSeq = 0;
+let refreshApplied = 0;
+
 async function refresh() {
   let s;
+  const seq = ++refreshSeq;
   try {
     s = await (await fetch(api('status'))).json();
   } catch {
     return;
   }
+  // Respostas podem chegar fora de ordem (a leitura periódica e a de depois de um comando):
+  // uma resposta antiga não pode desfazer o que a mais nova já mostrou.
+  if (seq < refreshApplied) return;
+  refreshApplied = seq;
 
   const live = s.state === 'live';
   const busy = s.state === 'starting';
@@ -438,7 +446,7 @@ function renderView() {
   $('navBroadcast').classList.toggle('active', view === 'broadcast');
   $('navRooms').classList.toggle('active', view === 'rooms');
   $('lobby').hidden = !lobby;
-  $('newRoomBtn').hidden = !lobby;
+  $('pageHeader').hidden = lobby;   // a lista de salas não tem título: o menu já diz onde você está
   $('workspace').hidden = lobby;
   document.body.classList.toggle('no-side', lobby);
   $('liveBadge').hidden = lobby;
@@ -596,7 +604,6 @@ function openNewRoom() {
 }
 
 $('createRoomBtn').onclick = createRoom;
-$('newRoomBtn').onclick = openNewRoom;
 $('newRoomCancel').onclick = () => $('newRoomDialog').close();
 $('newRoomName').onkeydown = (e) => { if (e.key === 'Enter') createRoom(); };
 $('roomActionBtn').onclick = async () => {
