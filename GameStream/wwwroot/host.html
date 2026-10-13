@@ -7,23 +7,71 @@
 <link rel="stylesheet" href="style.css">
 <style>
   body { display: grid; grid-template-columns: 1fr 320px; height: 100vh; }
-  main { display: flex; flex-direction: column; padding: 16px; gap: 12px; min-width: 0; overflow-y: auto; }
+  main { display: flex; flex-direction: column; padding: 16px; gap: 10px; min-width: 0; overflow-y: auto; }
+  main > * { flex: none; }
   header { display: flex; align-items: center; gap: 12px; }
   header h1 { font-size: 18px; margin: 0; flex: 1; }
   .preview {
-    flex: 1 1 280px; min-height: 220px; background: #000; border: 1px solid var(--border);
+    /* Ocupa o espaço que sobrar: encolhe ao abrir as configurações avançadas e cresce ao fechar.
+       Abaixo do mínimo, a página rola. */
+    flex: 1 1 0; min-height: 210px; background: #000; border: 1px solid var(--border);
     border-radius: 12px; overflow: hidden; position: relative;
   }
   .preview iframe { width: 100%; height: 100%; border: 0; display: block; }
-  .preview .empty { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; color: var(--muted); padding: 24px; }
 
   .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .row .grow { flex: 1; min-width: 240px; }
   .row select.grow { width: 100%; }
-  #message { font-size: 13px; min-height: 18px; }
-  #message.error { color: var(--live); white-space: pre-wrap; }
+  #message { font-size: 13px; min-height: 18px; white-space: pre-wrap; }
+  #message.error { color: var(--live); }
+  #message.warn { color: var(--warn); }
+  .small-btn { font-size: 12px; padding: 4px 10px; }
 
-  .settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+  /* Modo (criar / entrar) e nome */
+  .spacer { flex: 1; }
+  .seg { display: inline-flex; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 3px; gap: 3px; }
+  .seg-btn { background: transparent; border-color: transparent; padding: 6px 14px; }
+  .seg-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .name-field { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+  input[type=text] { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; }
+  input[type=text]:focus { outline: none; border-color: var(--accent); }
+  .name-field input { width: 190px; }
+  #joinMessage { font-size: 13px; }
+  #joinMessage.error { color: var(--live); }
+  #joinMessage.ok { color: var(--ok); }
+
+  .settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+
+  /* ---------- Responsivo ---------- */
+
+  /* Janela baixa: tudo mais compacto, para a sala não sumir. */
+  @media (max-height: 820px) {
+    main { padding: 10px 14px; gap: 8px; }
+    header h1 { font-size: 16px; }
+    .field { margin-top: 6px; }
+    fieldset { padding: 6px 10px 10px; }
+    .hint { margin-top: 6px; }
+    .source-btn { min-height: 40px; padding: 4px 10px 4px 4px; }
+    .source-btn img { width: 54px; height: 30px; }
+  }
+
+  /* Janela estreita: o painel lateral vai para baixo e a página inteira rola. */
+  @media (max-width: 940px) {
+    body { display: block; height: auto; }
+    main { overflow: visible; }
+    .preview { flex: none; height: 52vh; min-height: 240px; }
+    aside { border-left: 0; border-top: 1px solid var(--border); overflow: visible; }
+    .name-field input { width: 150px; }
+  }
+
+  /* Configurações avançadas: recolhidas por padrão */
+  details#advanced > summary {
+    cursor: pointer; user-select: none; padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px;
+    background: var(--panel); font-weight: 600; list-style-position: inside;
+  }
+  details#advanced > summary:hover { border-color: var(--accent); }
+  details#advanced > summary .muted { font-weight: 400; font-size: 12.5px; margin-left: 8px; }
+  details#advanced[open] > summary { margin-bottom: 12px; }
   fieldset {
     border: 1px solid var(--border); border-radius: 10px; background: var(--panel);
     padding: 10px 12px 12px; margin: 0; min-width: 0;
@@ -49,13 +97,18 @@
   .link button { padding: 4px 10px; font-size: 12px; }
   .stat { display: flex; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
   .stat b { font-variant-numeric: tabular-nums; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .tips { font-size: 12.5px; color: var(--muted); padding-left: 18px; margin: 0; }
-  .tips li { margin-bottom: 6px; }
 
   .link-tools { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 4px; }
   .link-tools button { font-size: 12px; padding: 5px 10px; }
   .link-tools label { color: var(--muted); font-size: 12px; display: flex; gap: 6px; align-items: center; }
   .link-tools select { padding: 4px 6px; font-size: 12px; }
+  .check { display: flex; gap: 8px; align-items: center; font-size: 12.5px; margin-top: 10px; }
+  .check input { accent-color: var(--accent); width: 15px; height: 15px; }
+
+  /* Código (PIN) da sala */
+  .pin-box { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+             background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px 8px 14px; }
+  .pin-code { font: 600 13px/1.4 Consolas, "Cascadia Mono", monospace; word-break: break-all; user-select: all; }
 
   /* Botão da fonte escolhida */
   .source-btn { display: flex; align-items: center; gap: 10px; text-align: left; padding: 6px 12px 6px 6px; min-height: 48px; }
@@ -105,9 +158,27 @@
     <span id="liveBadge" class="badge"><span class="dot"></span><span id="liveText">OFFLINE</span></span>
   </header>
 
+  <!-- Criar a própria sala ou entrar na de outra pessoa -->
+  <div class="row">
+    <div class="seg" role="tablist">
+      <button id="modeHost" class="seg-btn active" title="Você cria a sala e manda o link para os amigos">Criar sala</button>
+      <button id="modeJoin" class="seg-btn" title="Um amigo criou a sala e te mandou o link">Entrar em uma sala</button>
+    </div>
+    <span class="spacer"></span>
+    <label class="name-field">Seu nome
+      <input type="text" id="myName" maxlength="24" placeholder="Como aparecer na sala" autocomplete="off">
+    </label>
+  </div>
+  <div class="row" id="joinRow" hidden>
+    <input type="text" id="joinUrl" class="grow" placeholder="Cole o código da sala ou o link" autocomplete="off" spellcheck="false">
+    <button id="joinBtn" class="primary">Entrar</button>
+    <button id="leaveBtn" hidden>Sair da sala</button>
+  </div>
+  <div id="joinMessage" class="muted" hidden></div>
+
+  <!-- A sala: sua transmissão e as telas compartilhadas pelos outros -->
   <div class="preview">
-    <iframe id="preview" hidden title="Prévia"></iframe>
-    <div id="empty" class="empty"><div>Escolha a janela do jogo e clique em <b>Iniciar transmissão</b>.</div></div>
+    <iframe id="room" title="Sala" allow="fullscreen"></iframe>
   </div>
 
   <div class="row">
@@ -119,20 +190,24 @@
     <button id="startBtn" class="primary">▶ Iniciar transmissão</button>
     <button id="stopBtn" class="danger" hidden>■ Parar</button>
   </div>
-  <div id="message" class="muted"></div>
+  <div id="message" class="muted" hidden></div>
 
   <div class="row">
     <span class="muted">Predefinição:</span>
     <select id="profilePreset">
-      <option value="">Personalizado</option>
-      <option value="quality">Qualidade — 1080p 60 fps, GPU</option>
-      <option value="balanced">Equilibrado — 900p 60 fps, GPU</option>
-      <option value="stable30">Estável — 720p 30 fps fixos, GPU</option>
-      <option value="cpu">CPU — 720p 30 fps fixos, x264</option>
+      <option value="recommended">Recomendado — 720p 30 fps, codificador automático</option>
+      <option value="quality">Qualidade — 1080p 60 fps</option>
+      <option value="balanced">Equilibrado — 900p 60 fps</option>
+      <option value="cpu">CPU — 720p 30 fps, x264</option>
       <option value="light">Internet fraca — 540p 30 fps, 2,5 Mbps</option>
+      <option value="">Personalizado</option>
     </select>
+    <span class="spacer"></span>
+    <button id="logBtn" class="small-btn" title="Abre o arquivo com os detalhes técnicos (útil para relatar um problema)">📄 Ver log</button>
   </div>
 
+  <details id="advanced">
+  <summary>⚙ Configurações avançadas <span class="muted" id="advancedSummary"></span></summary>
   <div class="settings">
     <fieldset>
       <legend>Vídeo</legend>
@@ -238,23 +313,43 @@
       <div class="hint">"Só da janela" pega o som apenas do programa escolhido (Windows 11). Com um monitor, usa todo o som do PC. Ideal: medidor chegando no amarelo nas partes altas.</div>
     </fieldset>
   </div>
+  </details>
 </main>
 
 <aside>
-  <h2>🌍 Link para os amigos</h2>
+  <div id="guestSection" hidden>
+    <h2>🚪 Você está na sala de um amigo</h2>
+    <div class="hint" style="margin-top:0">Escolha a janela do jogo e clique em <b>Compartilhar minha tela na sala</b>. A captura usa as configurações abaixo, como numa sala sua.</div>
+  </div>
+  <div id="hostSection">
+  <h2>🔑 Código da sala</h2>
+  <div class="pin-box">
+    <span id="roomCode" class="pin-code muted">gerando…</span>
+    <button id="codeCopy" class="small-btn" disabled>Copiar</button>
+  </div>
+  <div class="hint">Para quem tem o GameStream: <b>Entrar em uma sala</b> e colar o código.</div>
+  <h2>🔗 Link (para abrir no navegador)</h2>
   <div id="links"><span class="muted">Carregando…</span></div>
   <div class="link-tools">
     <button id="rotateBtn" title="Cria um endereço novo e desconecta todos que estão assistindo">🔄 Gerar novo link</button>
-    <label title="Máximo de pessoas assistindo ao mesmo tempo">Limite
+    <label title="Máximo de pessoas na sala ao mesmo tempo">Limite
       <select id="maxViewers">
-        <option>3</option><option>5</option><option selected>10</option><option>20</option><option>50</option>
+        <option value="0" selected>Sem limite</option>
+        <option>3</option><option>5</option><option>10</option><option>20</option><option>50</option><option>100</option>
       </select>
     </label>
   </div>
-  <div class="hint">Só quem tem o link consegue assistir, e ninguém controla seu PC por ele. Se o link vazar, gere um novo.</div>
+  <label class="check" title="Quem entra pelo link pode compartilhar a própria tela na sala, direto do navegador.">
+    <input type="checkbox" id="allowShare" checked> Convidados podem compartilhar a tela
+  </label>
+  <div class="hint">Só quem tem o link entra na sala, e ninguém controla seu PC por ele. Se o link vazar, gere um novo. Quem tiver o GameStream pode colar o link em <b>Entrar em uma sala</b> para compartilhar com mais qualidade.</div>
+  </div>
 
   <h2>Status</h2>
-  <div class="stat"><span>Espectadores</span><b id="viewerCount">0</b></div>
+  <div id="roomStats">
+    <div class="stat"><span>Pessoas na sala</span><b id="viewerCount">0</b></div>
+    <div class="stat"><span>Telas de convidados</span><b id="guestStreams">0</b></div>
+  </div>
   <div class="stat"><span>Transmitindo</span><b id="sourceOut">—</b></div>
   <div class="stat"><span>Resolução</span><b id="sizeOut">—</b></div>
   <div class="stat"><span>Quadros enviados</span><b id="fpsOut">—</b></div>
@@ -262,13 +357,6 @@
   <div class="stat"><span>Codificador</span><b id="encoderOut">—</b></div>
   <div class="stat"><span>Áudio</span><b id="audioOut">—</b></div>
 
-  <h2>Dicas</h2>
-  <ul class="tips">
-    <li>Mande o link acima. Seus amigos abrem no Chrome, Edge ou Safari, sem instalar nada.</li>
-    <li>Cada espectador usa o bitrate escolhido do seu upload. Com 8 Mbps e 3 amigos são ~24 Mbps.</li>
-    <li>Travando? Use <b>720p</b>, <b>30 fps</b> e <b>FPS constante</b>. Em CPU, a resolução é o que mais pesa.</li>
-    <li>A <b>GPU</b> codifica num chip separado da placa e quase não afeta o jogo.</li>
-  </ul>
 </aside>
 
 <dialog id="picker">

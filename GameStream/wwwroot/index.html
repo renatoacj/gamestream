@@ -3,51 +3,198 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GameStream – Assistir</title>
+<title>GameStream – Sala</title>
 <link rel="icon" href="favicon.png">
 <link rel="stylesheet" href="style.css">
 <style>
-  body { display: flex; flex-direction: column; height: 100vh; }
-  .stage { flex: 1; min-height: 0; position: relative; background: #000; }
-  canvas { width: 100%; height: 100%; object-fit: contain; display: block; }
+  body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+  /* Barra de cima: quem está na sala */
+  .topbar {
+    display: flex; align-items: center; gap: 10px; padding: 8px 16px;
+    background: var(--panel); border-bottom: 1px solid var(--border); min-height: 44px;
+  }
+  .topbar .people { display: flex; gap: 6px; flex: 1; overflow: hidden; }
+  .chip {
+    padding: 2px 10px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--border);
+    font-size: 12px; white-space: nowrap;
+  }
+  .chip.me { border-color: var(--accent); }
+  .chip.host::before { content: "👑 "; }
+  .chip-remove { margin-left: 6px; padding: 0 5px; font-size: 11px; line-height: 16px; border-radius: 999px; }
+  .chip-remove:hover { border-color: var(--live); color: var(--live); }
+  #nameBtn { font-size: 12px; padding: 4px 10px; }
+
+  main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+  /* Tela expandida */
+  .stage { flex: 1; min-height: 120px; position: relative; background: #000; }
+  .stage canvas { width: 100%; height: 100%; object-fit: contain; display: block; }
   .overlay {
     position: absolute; inset: 0; display: grid; place-items: center;
     text-align: center; color: var(--muted); padding: 16px; pointer-events: none;
   }
   .overlay .big { font-size: 20px; color: var(--text); margin-bottom: 6px; }
+  .stage-top {
+    position: absolute; top: 12px; left: 12px; right: 12px; display: flex; gap: 8px; align-items: center;
+    opacity: 0; transition: opacity .2s; pointer-events: none;
+  }
+  .stage:hover .stage-top, .stage-top:focus-within { opacity: 1; }
+  .stage-top > * { pointer-events: auto; }
+  .stage-top button, .stage-top .label { background: rgba(15, 17, 21, .8); backdrop-filter: blur(6px); }
+  .stage-top .label { padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border); font-weight: 600; }
   #unmute {
-    position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+    position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
     background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600;
     font-size: 16px; padding: 10px 20px; box-shadow: 0 4px 20px rgba(0,0,0,.5);
     animation: pulse-btn 1.6s ease-in-out infinite;
   }
   @keyframes pulse-btn { 50% { transform: translateX(-50%) scale(1.06); } }
+
+  /* Miniaturas: grade grande (sem tela expandida) ou faixa embaixo (com tela expandida) */
+  .tiles { display: grid; gap: 14px; padding: 16px; overflow: auto; align-content: start; }
+  .tiles.grid { flex: 1; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+  .tiles.strip {
+    grid-auto-flow: column; grid-auto-columns: 132px; padding: 6px 12px; gap: 8px; flex: none;
+    background: var(--panel); border-top: 1px solid var(--border); overflow-x: auto; overflow-y: hidden;
+  }
+  .tile {
+    position: relative; display: flex; flex-direction: column; gap: 6px; padding: 8px; text-align: left;
+    background: var(--panel-2); border: 2px solid transparent; border-radius: 12px; cursor: pointer;
+  }
+  .tile:hover { border-color: var(--border); }
+  .tile.selected { border-color: var(--accent); }
+  .tile.mine { cursor: default; }
+  .tile .thumb {
+    aspect-ratio: 16 / 9; background: #000; border-radius: 8px; overflow: hidden;
+    display: grid; place-items: center; color: var(--muted); font-size: 28px; position: relative;
+  }
+  .tile .thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .tile .live-tag {
+    position: absolute; top: 6px; left: 6px; background: var(--live); color: #fff; font-size: 10px;
+    font-weight: 700; padding: 1px 6px; border-radius: 4px; letter-spacing: .04em;
+  }
+  .tile .expand-hint {
+    position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,.55);
+    color: #fff; font-size: 14px; font-weight: 600; opacity: 0; transition: opacity .15s;
+  }
+  .tile:not(.mine):not(.selected):hover .expand-hint { opacity: 1; }
+  .tile .meta { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .tile .meta b { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+  .tile .meta small { color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .tile .kick { padding: 0 6px; font-size: 12px; line-height: 20px; }
+  .tiles.strip .tile { padding: 4px; gap: 2px; }
+  .tiles.strip .tile .live-tag { font-size: 9px; padding: 0 4px; top: 4px; left: 4px; }
+  .tiles.strip .tile .meta b { font-size: 12px; }
+  .empty-room { grid-column: 1 / -1; text-align: center; color: var(--muted); padding: 48px 16px; }
+  .empty-room .big { font-size: 20px; color: var(--text); margin-bottom: 6px; }
+
+  /* Barra de baixo */
   .bar {
     display: flex; align-items: center; gap: 10px; padding: 8px 16px;
     background: var(--panel); border-top: 1px solid var(--border); flex-wrap: wrap;
   }
   .bar .spacer { flex: 1; }
   .bar input[type=range] { width: 110px; accent-color: var(--accent); }
-  /* Prévia dentro do app: só a imagem */
-  body.preview .bar, body.preview #unmute { display: none; }
+  .bar select { padding: 6px 8px; }
+
+  #toast {
+    position: fixed; left: 50%; bottom: 72px; transform: translateX(-50%); z-index: 10;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 16px; max-width: min(520px, 90vw); box-shadow: 0 6px 24px rgba(0,0,0,.5);
+  }
+
+  dialog {
+    border: 1px solid var(--border); border-radius: 14px; background: var(--panel); color: var(--text);
+    padding: 20px; width: min(380px, 92vw);
+  }
+  dialog::backdrop { background: rgba(0, 0, 0, .6); }
+  dialog h2 { margin: 0 0 12px; font-size: 17px; }
+  dialog input[type=text] {
+    width: 100%; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 9px 10px;
+  }
+  dialog .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+
+  /* ---------- Responsivo ---------- */
+
+  /* Pouca altura: barras e miniaturas compactas, para sobrar espaço para o vídeo. */
+  @media (max-height: 420px) {
+    .topbar { min-height: 0; padding: 4px 10px; }
+    .bar { padding: 4px 10px; gap: 6px; }
+    .bar button, .topbar button, .bar select { padding: 3px 9px; font-size: 12px; }
+    .bar input[type=range] { width: 80px; }
+    .chip { font-size: 11px; padding: 1px 8px; }
+    .tiles.grid { padding: 8px; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+    .tiles.strip { grid-auto-columns: 104px; padding: 4px 8px; }
+    .tiles.strip .tile .meta small { display: none; }
+    .empty-room { padding: 14px 12px; }
+    .empty-room .big { font-size: 15px; margin-bottom: 2px; }
+    .stage { min-height: 80px; }
+    #unmute { font-size: 13px; padding: 6px 12px; bottom: 10px; }
+  }
+  @media (max-height: 300px) {
+    .tiles.strip { grid-auto-columns: 84px; }
+    .tiles.strip .tile .meta { display: none; }
+  }
+
+  /* Pouca largura (celular): controles quebram de linha sem estourar a tela. */
+  @media (max-width: 560px) {
+    .topbar { flex-wrap: wrap; }
+    .bar { justify-content: space-between; }
+    .bar .spacer { display: none; }
+    #info { flex-basis: 100%; order: 9; }
+    .tiles.grid { grid-template-columns: 1fr; padding: 10px; }
+  }
+
+  /* Dentro da janela do app: o compartilhamento é feito pelos controles do app */
+  body.embedded #shareBtn, body.embedded #shareQuality { display: none; }
 </style>
 </head>
 <body>
-<div class="stage" id="stage">
-  <canvas id="screen" width="1280" height="720"></canvas>
-  <div class="overlay" id="overlay">
-    <div><div class="big" id="overlayTitle">Conectando…</div><div id="overlayText"></div></div>
-  </div>
-  <button id="unmute" hidden>🔊 Clique para ativar o som</button>
-</div>
-<div class="bar">
-  <span id="badge" class="badge"><span class="dot"></span><span id="badgeText">OFFLINE</span></span>
+<header class="topbar">
+  <b>🎮 Sala</b>
+  <div class="people" id="people"></div>
+  <button id="nameBtn" title="Mudar meu nome">✎ <span id="myName">…</span></button>
+</header>
+
+<main>
+  <section class="stage" id="stage" hidden>
+    <canvas id="screen" width="1280" height="720"></canvas>
+    <div class="overlay" id="overlay">
+      <div><div class="big" id="overlayTitle"></div><div id="overlayText"></div></div>
+    </div>
+    <div class="stage-top">
+      <button id="backBtn" title="Voltar para a lista de telas">⬅ Todas as telas</button>
+      <span class="label" id="stageName"></span>
+    </div>
+    <button id="unmute" hidden>🔊 Clique para ativar o som</button>
+  </section>
+
+  <section class="tiles grid" id="tiles"></section>
+</main>
+
+<footer class="bar">
+  <button id="shareBtn" class="primary" hidden>🖥 Compartilhar minha tela</button>
+  <select id="shareQuality" title="Qualidade do meu compartilhamento" hidden>
+    <option value="1280x720@30@3000">720p · 30 fps</option>
+    <option value="1920x1080@30@5000">1080p · 30 fps</option>
+    <option value="1920x1080@60@8000">1080p · 60 fps</option>
+  </select>
   <span class="muted" id="info"></span>
   <span class="spacer"></span>
   <button id="muteBtn" title="Ligar/desligar o som">🔇 Som desligado</button>
   <label title="Volume"><input type="range" id="volume" min="0" max="2" step="0.01" value="1"></label>
   <button id="fullscreen">⛶ Tela cheia</button>
-</div>
-<script src="viewer.js"></script>
+</footer>
+
+<div id="toast" hidden></div>
+
+<dialog id="nameDialog">
+  <h2>Como você quer ser chamado?</h2>
+  <input type="text" id="nameInput" maxlength="24" placeholder="Seu nome" autocomplete="off">
+  <div class="actions"><button id="nameOk" class="primary">Entrar</button></div>
+</dialog>
+
+<script src="room.js"></script>
 </body>
 </html>

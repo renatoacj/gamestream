@@ -38,5 +38,5 @@ public sealed record StreamSettings
     public int AudioKbps { get; init; } = 160;
 
     /// <summary>Ganho aplicado ao áudio antes de codificar (dB), com limitador para não distorcer.</summary>
-    public int AudioGainDb { get; init; } = 6;
+    public int AudioGainDb { get; init; }
 }

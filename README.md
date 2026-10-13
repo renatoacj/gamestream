@@ -5,8 +5,8 @@
 <h1 align="center">GameStream</h1>
 
 <p align="center">
-  Transmita a tela do seu jogo, com som, para amigos pela internet.<br>
-  Eles só abrem um link no navegador. Não precisa de conta, de servidor nem de abrir portas.
+  Uma sala para você e seus amigos compartilharem a tela dos jogos, com som, pela internet.<br>
+  Quem entra só abre um link no navegador. Não precisa de conta, de servidor nem de abrir portas.
 </p>
 
 <p align="center">
@@ -19,23 +19,28 @@
 
 ## Recursos
 
+- **Sala com várias telas**: quem entra pelo link também pode compartilhar a tela. As telas aparecem como miniaturas, e um clique expande a que você quer assistir.
+- **Duas formas de participar**: pelo navegador, sem instalar nada (Chrome ou Edge para compartilhar), ou pelo GameStream em **Entrar em uma sala**, para compartilhar com a mesma qualidade de quem criou a sala.
+- **Código da sala**: além do link, a sala tem um código como `spears-manhattan-calgary-until-482913`, para colar no GameStream. Ele é o próprio endereço da sala em outro formato e não depende de nenhum serviço.
 - **Link público gratuito e automático**: o app abre um [Cloudflare Quick Tunnel](https://try.cloudflare.com) e mostra um link `https://….trycloudflare.com`.
 - **Captura de uma janela ou de um monitor** com o Windows Graphics Capture (via FFmpeg `gfxcapture`). A captura e a mudança de resolução acontecem na GPU.
-- **Vídeo H.264 com baixa latência**, codificado por NVIDIA NVENC, AMD AMF, Intel Quick Sync ou CPU (x264), à sua escolha.
+- **Vídeo H.264 com baixa latência**, codificado por NVIDIA NVENC, AMD AMF, Intel Quick Sync ou CPU (x264). O app detecta o que o PC tem e, se o escolhido falhar, usa outro e avisa.
 - **Áudio só da janela escolhida** (process loopback do Windows) ou de todo o PC, em Opus estéreo.
 - **Configurações no estilo OBS**: resolução de saída, FPS constante, CBR/VBR, bitrate, preset, intervalo de quadro-chave, perfil H.264 e bitrate do áudio, além de predefinições prontas.
 - **Não depende de P2P**: tudo passa pelo link HTTPS, então funciona em qualquer rede (4G, redes com NAT, etc.).
 - **Um amigo com internet lenta não atrasa os outros**: cada um tem sua fila, e quem atrasa pula para o quadro-chave mais recente.
-- **Seguro por padrão**: o servidor só escuta em `localhost`, e o link tem uma chave aleatória nova a cada execução.
+- **Economia de upload**: cada pessoa só recebe o vídeo da tela que expandiu.
+- **Seguro por padrão**: o servidor só escuta em `localhost`, e o link tem uma chave aleatória nova a cada execução. Quem criou a sala pode trocar o link e o código, limitar o número de pessoas, desligar o compartilhamento dos convidados e encerrar a tela de alguém.
 
 ## Instalar
 
 **[⬇ Baixar o instalador (última versão)](https://github.com/renatoacj/gamestream/releases/latest)**
 
-Baixe o `GameStream-Setup-x.y.z.exe` e execute. Não precisa ser administrador nem instalar o .NET, porque ele já vem embutido.
+Baixe o `GameStream-Setup-x.y.z.exe` e execute. Não precisa ser administrador nem instalar o .NET, porque ele já vem embutido. Para atualizar, é só instalar a versão nova por cima: não precisa desinstalar a antiga, e as configurações são mantidas.
 
 - **Requisitos:** Windows 10 1903+ ou Windows 11, 64 bits. O "áudio só da janela" exige Windows 11.
 - **Aviso do Windows:** como o instalador não tem assinatura digital, o Windows pode mostrar "O Windows protegeu o computador". Clique em **Mais informações → Executar assim mesmo**.
+- **Smart App Control:** em PCs com o Smart App Control do Windows 11 ligado, o app pode ser bloqueado ("Parte deste aplicativo foi bloqueado"), porque ainda não é assinado digitalmente. Nesses PCs dá para participar da sala pelo navegador.
 - **WebView2:** se o computador não tiver o WebView2 Runtime, o instalador baixa e instala a versão oficial da Microsoft.
 
 Para gerar o instalador (requer [Inno Setup 6](https://jrsoftware.org/isinfo.php)):
@@ -46,11 +51,19 @@ powershell -ExecutionPolicy Bypass -File tools/build-installer.ps1
 
 ## Como usar
 
+**Criar uma sala**
+
 1. Abra o **GameStream**. Na primeira vez ele baixa o `cloudflared` e o FFmpeg oficiais (~200 MB).
-2. Escolha a **janela do jogo** na lista e ajuste as configurações, ou use uma **predefinição**.
+2. Escolha a **janela do jogo** na lista. A predefinição **Recomendado** (720p, 30 fps) já vem escolhida; as outras opções ficam em **Configurações avançadas**.
 3. Clique em **▶ Iniciar transmissão**.
-4. Copie o link da lateral e mande para os amigos. Eles devem abrir no Chrome, Edge ou Safari atualizado.
-5. Cada amigo clica em **🔊 Ativar som**, porque o navegador exige um clique para tocar áudio.
+4. Mande para os amigos o **código da sala** (para quem tem o GameStream) ou o **link** (para abrir no navegador). Os dois ficam na lateral.
+
+**Entrar na sala de um amigo**
+
+- **Pelo navegador:** abra o link no Chrome, Edge ou Safari atualizado. Para compartilhar a sua tela, clique em **🖥 Compartilhar minha tela** (Chrome ou Edge no computador).
+- **Pelo GameStream:** clique em **Entrar em uma sala**, escreva o seu nome, cole o código (ou o link) e clique em **Entrar**. Depois escolha a janela do jogo e clique em **Compartilhar minha tela na sala**.
+
+Em qualquer um dos casos, clique numa miniatura para assistir àquela tela e em **🔊** para ligar o som (o navegador exige um clique para tocar áudio).
 
 > Dica: se travar, use **720p**, **30 fps** e **FPS constante**. No modo CPU, a resolução é o que mais pesa.
 

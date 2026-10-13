@@ -9,12 +9,14 @@ namespace GameStream;
 /// </summary>
 public sealed class Broadcaster : IDisposable
 {
-    private readonly StreamServer _server;
+    // Para onde a transmissão vai: a sala local ou a sala de outra pessoa (quando o app "entra" numa sala).
+    private IRoomSink _server;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private readonly SemaphoreSlim _lock = new(1, 1);
 
     private VideoCapture? _video;
     private AudioCapture? _audio;
+    private CancellationTokenSource? _thumbnails;
 
     private double _nextVideoTs;           // horário "ideal" do próximo quadro (µs)
     private double _frameIntervalMicros;   // 1/fps em µs; 0 = FPS variável
@@ -30,7 +32,30 @@ public sealed class Broadcaster : IDisposable
     public string? AudioLabel { get; private set; }
     public string? SourceName { get; private set; }
 
-    public Broadcaster(StreamServer server) => _server = server;
+    public Broadcaster(IRoomSink sink) => _server = sink;
+
+    /// <summary>Troca o destino da transmissão (parando a que estiver no ar).</summary>
+    public async Task SetSinkAsync(IRoomSink sink)
+    {
+        await StopAsync();
+        _server = sink;
+    }
+
+    /// <summary>Encerra a transmissão mostrando um motivo (ex.: a sala recusou o compartilhamento).</summary>
+    public async Task StopWithMessageAsync(string reason)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            StopCore();
+            State = "error";
+            Message = reason;
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
 
     /// <summary>Pico do áudio em dBFS desde a última consulta (medidor), ou null sem áudio.</summary>
     public double? TakeAudioLevelDb()
@@ -46,8 +71,9 @@ public sealed class Broadcaster : IDisposable
     {
         try
         {
-            await Tools.EnsureFfmpegAsync(m => { if (State == "offline") Message = m; });
+            var ffmpeg = await Tools.EnsureFfmpegAsync(m => { if (State == "offline") Message = m; });
             if (State == "offline") Message = null;
+            _ = VideoCapture.ProbeEncodersAsync(ffmpeg);   // já deixa pronto o teste dos codificadores
         }
         catch (Exception ex)
         {
@@ -75,8 +101,10 @@ public sealed class Broadcaster : IDisposable
             video.Frame += OnVideoFrame;
             video.Failed += err =>
             {
+                Tools.Log("A captura parou: " + err);
                 State = "error";
                 Message = "A captura parou: " + err;
+                _thumbnails?.Cancel();
                 _audio?.Stop();
                 _server.PublishOffline();
             };
@@ -91,6 +119,9 @@ public sealed class Broadcaster : IDisposable
             _server.PublishConfig(BuildConfig(s.Profile, audioMode != "none"));
             await video.StartAsync(s, source, CancellationToken.None);
             _video = video;
+            var notes = new List<string>();
+            if (video.Warning != null) notes.Add(video.Warning);
+            StartThumbnails(source.Id);
 
             AudioLabel = "Não";
             if (audioMode != "none")
@@ -114,16 +145,19 @@ public sealed class Broadcaster : IDisposable
                 catch (Exception ex)
                 {
                     // Sem áudio não impede a transmissão.
-                    Message = "Transmitindo sem áudio: " + ex.Message;
+                    Tools.Log("Falha ao capturar áudio: " + ex);
+                    notes.Add("Transmitindo sem áudio: " + ex.Message);
+                    AudioLabel = "Não";
                     _server.PublishConfig(BuildConfig(s.Profile, false));
                 }
             }
 
             State = "live";
-            if (Message?.StartsWith("Transmitindo sem áudio") != true) Message = null;
+            Message = notes.Count > 0 ? string.Join('\n', notes) : null;
         }
         catch (Exception ex)
         {
+            Tools.Log("Falha ao iniciar a transmissão: " + ex.Message);
             StopCore();
             State = "error";
             Message = ex.Message;
@@ -149,8 +183,30 @@ public sealed class Broadcaster : IDisposable
         }
     }
 
+    /// <summary>Enquanto transmite, manda uma miniatura da tela para a sala a cada poucos segundos.</summary>
+    private void StartThumbnails(string sourceId)
+    {
+        var cts = _thumbnails = new CancellationTokenSource();
+        _ = Task.Run(async () =>
+        {
+            while (!cts.IsCancellationRequested)
+            {
+                try
+                {
+                    if (await Thumbnails.GetAsync(sourceId) is { } jpeg && !cts.IsCancellationRequested)
+                        _server.PublishThumbnail(jpeg);
+                    await Task.Delay(TimeSpan.FromSeconds(8), cts.Token);
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex) { Tools.Log("Miniatura: " + ex.Message); }
+            }
+        });
+    }
+
     private void StopCore()
     {
+        _thumbnails?.Cancel();
+        _thumbnails = null;
         _video?.Stop();
         _video = null;
         _audio?.Stop();
@@ -178,18 +234,16 @@ public sealed class Broadcaster : IDisposable
         AudioGainDb = Math.Clamp(s.AudioGainDb, 0, 24),
     };
 
-    private static string BuildConfig(string profile, bool audio)
+    private static JsonObject BuildConfig(string profile, bool audio)
     {
-        var msg = new JsonObject
+        return new JsonObject
         {
-            ["type"] = "config",
             // Nível 5.2 cobre até 4K60; o decodificador aceita qualquer nível menor.
             ["video"] = new JsonObject { ["codec"] = profile == "main" ? "avc1.4d0034" : "avc1.640034" },
             ["audio"] = audio
                 ? new JsonObject { ["codec"] = "opus", ["sampleRate"] = AudioCapture.SampleRate, ["numberOfChannels"] = AudioCapture.Channels }
                 : null,
         };
-        return msg.ToJsonString();
     }
 
     private long NowMicros() => _clock.ElapsedTicks * 1_000_000 / Stopwatch.Frequency;

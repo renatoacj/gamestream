@@ -43,6 +43,10 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
+[InstallDelete]
+; Arquivos de versões antigas que não existem mais (a instalação é feita por cima da anterior).
+Type: files; Name: "{app}\wwwroot\viewer.js"
+
 [Files]
 Source: "..\artifacts\app\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 

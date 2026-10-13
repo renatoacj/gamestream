@@ -13,24 +13,88 @@ namespace GameStream;
 /// </summary>
 public sealed class VideoCapture : IDisposable
 {
-    private sealed record EncoderDef(string Id, string Label, Func<StreamSettings, string> Args);
+    /// <param name="Codec">Nome do codificador no FFmpeg (ex.: h264_amf).</param>
+    /// <param name="DirectFilter">Filtro para entregar o quadro da captura (textura D3D11) direto ao codificador; "" = nenhum.</param>
+    /// <param name="CopyFilter">Filtro alternativo: traz o quadro para a memória antes de codificar (mais compatível).</param>
+    /// <param name="Options">Opções completas do codificador.</param>
+    private sealed record EncoderDef(string Id, string Label, string Codec, string? DirectFilter, string CopyFilter,
+        Func<StreamSettings, string> Options);
 
     private static readonly EncoderDef[] Encoders =
     [
-        new("nvenc", "NVIDIA NVENC", s =>
-            $"-c:v h264_nvenc -preset {Pick(s, "p2", "p4", "p6")} -tune ll -zerolatency 1 -bf 0 " +
+        new("nvenc", "NVIDIA NVENC", "h264_nvenc", "", "hwdownload,format=bgra", s =>
+            $"-preset {Pick(s, "p2", "p4", "p6")} -tune ll -zerolatency 1 -bf 0 " +
             $"-profile:v {s.Profile} {(s.RateControl == "vbr" ? "-rc vbr" : "-rc cbr")} {Rate(s)}"),
-        new("amf", "AMD AMF", s =>
-            $"-c:v h264_amf -usage ultralowlatency -quality {Pick(s, "speed", "balanced", "quality")} -bf 0 " +
+        new("amf", "AMD AMF", "h264_amf", "", "hwdownload,format=bgra,format=nv12", s =>
+            $"-usage ultralowlatency -quality {Pick(s, "speed", "balanced", "quality")} -bf 0 " +
             $"-profile:v {s.Profile} {(s.RateControl == "vbr" ? "-rc vbr_peak" : "-rc cbr")} {Rate(s)}"),
-        new("qsv", "Intel Quick Sync", s =>
-            $"-vf hwmap=derive_device=qsv,format=qsv -c:v h264_qsv -preset {Pick(s, "veryfast", "medium", "slower")} " +
-            $"-look_ahead 0 -profile:v {s.Profile} {Rate(s)}"),
-        // Na CPU a imagem precisa sair da GPU (hwdownload); por isso a resolução de saída pesa muito aqui.
-        new("x264", "CPU (x264)", s =>
-            $"-vf hwdownload,format=bgra,format=yuv420p -c:v libx264 -preset {Pick(s, "ultrafast", "veryfast", "faster")} " +
-            $"-tune zerolatency -profile:v {s.Profile} {Rate(s)}{(s.RateControl == "cbr" ? " -x264-params nal-hrd=cbr" : "")}"),
+        new("qsv", "Intel Quick Sync", "h264_qsv", "hwmap=derive_device=qsv,format=qsv", "hwdownload,format=bgra,format=nv12", s =>
+            $"-preset {Pick(s, "veryfast", "medium", "slower")} -look_ahead 0 -profile:v {s.Profile} {Rate(s)}"),
+        // Na CPU a imagem sempre precisa sair da GPU; por isso a resolução de saída pesa muito aqui.
+        new("x264", "CPU (x264)", "libx264", null, "hwdownload,format=bgra,format=yuv420p", s =>
+            $"-preset {Pick(s, "ultrafast", "veryfast", "faster")} -tune zerolatency -profile:v {s.Profile} " +
+            $"{Rate(s)}{(s.RateControl == "cbr" ? " -x264-params nal-hrd=cbr" : "")}"),
     ];
+
+    /// <summary>
+    /// Formas de ligar a captura a um codificador, da melhor para a mais compatível. Drivers de
+    /// vídeo diferem bastante (principalmente AMD/Intel), então se a ligação direta ou alguma
+    /// opção não for aceita, as seguintes ainda permitem usar a placa de vídeo.
+    /// </summary>
+    private static IEnumerable<(string Args, string Note)> Variants(EncoderDef e, StreamSettings s)
+    {
+        string Build(string filter, string options) =>
+            $"{(filter == "" ? "" : $"-vf {filter} ")}-c:v {e.Codec} {options}";
+
+        if (e.DirectFilter != null) yield return (Build(e.DirectFilter, e.Options(s)), "");
+        var note = e.DirectFilter != null ? " (cópia pela memória)" : "";
+        yield return (Build(e.CopyFilter, e.Options(s)), note);
+        if (e.Id != "x264") yield return (Build(e.CopyFilter, $"-b:v {s.BitrateKbps}k -bf 0"), note + " (opções básicas)");
+    }
+
+    // ---------- Quais codificadores este PC tem ----------
+
+    private static Task<Dictionary<string, bool>>? _probe;
+
+    /// <summary>
+    /// Testa cada codificador com um vídeo sintético minúsculo (uma vez por execução).
+    /// Serve para a interface marcar os indisponíveis e para o "automático" não perder tempo com eles.
+    /// </summary>
+    public static Task<Dictionary<string, bool>> ProbeEncodersAsync(string ffmpeg) =>
+        _probe ??= Task.Run(async () =>
+        {
+            var tests = Encoders.Select(async e =>
+            {
+                var (code, err) = await RunAsync(ffmpeg,
+                    "-hide_banner -loglevel error -f lavfi -i color=black:s=640x360:r=30 -frames:v 3 " +
+                    $"-vf format={(e.Id == "x264" ? "yuv420p" : "nv12")} -c:v {e.Codec} -f null -", TimeSpan.FromSeconds(15));
+                Tools.Log($"Teste do codificador {e.Label}: {(code == 0 ? "disponível" : "indisponível — " + LastLine(err))}");
+                return (e.Id, Ok: code == 0);
+            });
+            return (await Task.WhenAll(tests)).ToDictionary(t => t.Id, t => t.Ok);
+        });
+
+    public static IEnumerable<(string Id, string Label)> EncoderList => Encoders.Select(e => (e.Id, e.Label));
+
+    private static string LastLine(string text) =>
+        text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault() ?? "sem mensagem";
+
+    private static async Task<(int ExitCode, string Stderr)> RunAsync(string exe, string args, TimeSpan timeout)
+    {
+        using var p = Process.Start(new ProcessStartInfo(exe, args)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+        })!;
+        var err = p.StandardError.ReadToEndAsync();
+        _ = p.StandardOutput.ReadToEndAsync();
+        using var cts = new CancellationTokenSource(timeout);
+        try { await p.WaitForExitAsync(cts.Token); }
+        catch (OperationCanceledException) { Kill(p); return (-1, "tempo esgotado"); }
+        return (p.ExitCode, await err);
+    }
 
     private static string Pick(StreamSettings s, string speed, string balanced, string quality) =>
         s.Preset switch { "speed" => speed, "quality" => quality, _ => balanced };
@@ -56,30 +120,47 @@ public sealed class VideoCapture : IDisposable
     public string? EncoderLabel { get; private set; }
     public string? OutputSize { get; private set; }
 
+    /// <summary>Preenchido quando o codificador escolhido não funcionou e outro foi usado no lugar.</summary>
+    public string? Warning { get; private set; }
+
     public VideoCapture(string ffmpeg) => _ffmpeg = ffmpeg;
 
     public async Task StartAsync(StreamSettings s, CaptureSource source, CancellationToken token)
     {
-        // "auto" tenta as GPUs (NVIDIA, AMD, Intel) e usa a CPU como último recurso.
-        var candidates = s.Encoder == "auto" ? Encoders : Encoders.Where(e => e.Id == s.Encoder).ToArray();
-        if (candidates.Length == 0) throw new ArgumentException("Codificador desconhecido: " + s.Encoder);
+        var available = await ProbeEncodersAsync(_ffmpeg);
+        var chosen = Encoders.FirstOrDefault(e => e.Id == s.Encoder);
+
+        // Ordem: o escolhido primeiro; depois (ou no "automático") as GPUs que este PC tem e, por fim, a CPU.
+        var order = new List<EncoderDef>();
+        if (chosen != null) order.Add(chosen);
+        order.AddRange(Encoders.Where(e => e != chosen && available.GetValueOrDefault(e.Id)));
+        if (!order.Any(e => e.Id == "x264")) order.Add(Encoders.First(e => e.Id == "x264"));
 
         var errors = new StringBuilder();
-        foreach (var enc in candidates)
+        foreach (var enc in order)
         {
-            token.ThrowIfCancellationRequested();
-            var error = await TryStartAsync(BuildArgs(s, source, enc), token);
-            if (error == null)
+            // O escolhido é tentado mesmo que o teste inicial tenha dito "indisponível" (o teste pode errar).
+            foreach (var (args, note) in Variants(enc, s))
             {
-                EncoderLabel = enc.Label;
-                return;
+                token.ThrowIfCancellationRequested();
+                var commandLine = BuildArgs(s, source, args);
+                var error = await TryStartAsync(commandLine, token);
+                if (error == null)
+                {
+                    EncoderLabel = enc.Label + note;
+                    Tools.Log($"Transmitindo com {EncoderLabel}: ffmpeg {commandLine}");
+                    if (chosen != null && enc != chosen)
+                        Warning = $"{chosen.Label} não funcionou neste PC; usando {enc.Label}. Detalhes no log.";
+                    return;
+                }
+                Tools.Log($"Falhou {enc.Label}{note}: ffmpeg {commandLine}\n{error}");
+                errors.AppendLine($"{enc.Label}{note}: {LastLine(error)}");
             }
-            errors.AppendLine($"{enc.Label}: {error}");
         }
-        throw new InvalidOperationException("O codificador não funcionou.\n" + errors.ToString().Trim());
+        throw new InvalidOperationException("Nenhum codificador de vídeo funcionou.\n" + errors.ToString().Trim());
     }
 
-    private string BuildArgs(StreamSettings s, CaptureSource source, EncoderDef enc)
+    private string BuildArgs(StreamSettings s, CaptureSource source, string encoderArgs)
     {
         var handle = source.Id[2..];
         var input = source.Kind == "window" ? $"hwnd={handle}" : $"hmonitor={handle}";
@@ -102,7 +183,7 @@ public sealed class VideoCapture : IDisposable
 
         return "-hide_banner -loglevel error -nostats " +
                $"-f lavfi -i gfxcapture={input}:max_framerate={s.Fps}:capture_cursor={cursor}{size} " +
-               $"{fpsMode} {enc.Args(s)} -g {gop} -force_key_frames expr:gte(t,n_forced*{keySec}) " +
+               $"{fpsMode} {encoderArgs} -g {gop} -force_key_frames expr:gte(t,n_forced*{keySec}) " +
                "-bsf:v h264_metadata=aud=insert -flush_packets 1 -f h264 pipe:1";
     }
 

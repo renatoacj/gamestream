@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -6,6 +7,7 @@ using System.Net.WebSockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using System.Threading.Channels;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -17,38 +19,56 @@ namespace GameStream;
 
 /// <summary>
 /// Servidor HTTP embutido (só em localhost; o acesso externo chega pelo túnel).
-/// Serve as páginas, a API de controle usada pela janela do app e distribui a
-/// transmissão para cada espectador por WebSocket.
+/// Serve as páginas, a API de controle usada pela janela do app e mantém a "sala":
+/// participantes, as telas compartilhadas (a do app e as dos convidados) e a
+/// distribuição de cada transmissão para quem escolheu assistir.
 /// </summary>
-public sealed class StreamServer : IAsyncDisposable
+public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
 {
-    // Protocolo binário (servidor -> espectador):
-    //   [0] tipo: 1 = vídeo, 2 = áudio
-    //   [1] flags: bit 0 = quadro-chave
-    //   [2..9] timestamp em µs (float64 little-endian)
-    //   [10..] dados codificados (H.264 Annex B ou Opus)
+    // Protocolo binário (nos dois sentidos):
+    //   [0]     tipo: 1 = vídeo, 2 = áudio, 3 = miniatura (JPEG)
+    //   [1]     flags: bit 0 = quadro-chave
+    //   [2..3]  número da transmissão (u16 LE; o servidor sobrescreve o que vem do convidado)
+    //   [4..11] timestamp em µs (float64 LE)
+    //   [12..]  dados (H.264 Annex B / VP8, Opus ou JPEG)
     public const byte KindVideo = 1;
     public const byte KindAudio = 2;
-    private const int HeaderSize = 10;
+    public const byte KindThumb = 3;
+    private const int HeaderSize = 12;
+    private const ushort HostStreamNo = 0;
 
-    /// <summary>Se a fila de um espectador passar disso, a conexão dele está lenta: descartamos e recomeçamos num quadro-chave.</summary>
-    private const long ViewerBacklogLimit = 4 * 1024 * 1024;
+    /// <summary>Se a fila de um participante passar disso, a conexão dele está lenta: descartamos e recomeçamos num quadro-chave.</summary>
+    private const long BacklogLimit = 4 * 1024 * 1024;
+
+    // Limites para o que um convidado pode enviar (ninguém do link é confiável por padrão).
+    private const int MaxTextBytes = 8 * 1024;
+    private const int MaxMediaBytes = 3 * 1024 * 1024;
+    private const int MaxThumbBytes = 256 * 1024;
+    private const long MaxPublishBytesPerSecond = 4 * 1024 * 1024;   // ~32 Mbps
+    private const int MaxStreams = 8;
 
     private readonly int _port;
     private readonly string _webRoot;
     private WebApplication? _app;
 
-    private readonly ConcurrentDictionary<string, Viewer> _viewers = new();
-    private volatile string? _config;   // último "config" (codecs), reenviado para quem entra
+    private readonly ConcurrentDictionary<string, Participant> _people = new();
+    private readonly ConcurrentDictionary<ushort, RoomStream> _streams = new();
+    private int _nextStreamNo;
+
+    // Endereços de quem o anfitrião removeu da sala: não entram de novo enquanto o app estiver aberto.
+    private readonly ConcurrentDictionary<string, bool> _removedIps = new();
 
     /// <summary>Token secreto usado só pela janela do app.</summary>
     public string HostToken { get; } = NewToken(24);
 
-    /// <summary>Chave que vai no link compartilhado com os espectadores. Pode ser trocada (<see cref="RotateViewKey"/>).</summary>
+    /// <summary>Chave que vai no link compartilhado. Pode ser trocada (<see cref="RotateViewKey"/>).</summary>
     public string ViewKey { get; private set; } = NewToken(12);
 
-    /// <summary>Limite de espectadores simultâneos: protege seu upload se o link vazar.</summary>
-    public int MaxViewers { get; set; } = 10;
+    /// <summary>Limite de pessoas na sala; 0 = sem limite.</summary>
+    public int MaxViewers { get; set; }
+
+    /// <summary>Se quem entra pelo link também pode compartilhar a própria tela.</summary>
+    public bool AllowGuestShare { get; private set; } = true;
 
     public int Port => _port;
 
@@ -57,7 +77,67 @@ public sealed class StreamServer : IAsyncDisposable
 
     public Broadcaster? Broadcaster { get; set; }
 
-    public int ViewerCount => _viewers.Values.Count(v => !v.IsPreview);
+    /// <summary>
+    /// Senha curta da sala (6 números), usada no "código da sala". Vale junto com a chave longa do link
+    /// e é trocada com ela. Como é curta, tentativas erradas demais bloqueiam a entrada por código por um tempo.
+    /// </summary>
+    public string RoomPin { get; private set; } = NewPin();
+
+    /// <summary>
+    /// Código da sala: as palavras do endereço do túnel + a senha curta (ex.: "spears-manhattan-calgary-until-482913").
+    /// É o próprio endereço da sala em formato mais fácil de passar; não depende de nenhum serviço.
+    /// </summary>
+    public string? RoomCode =>
+        Tunnel?.Url is { } url && RoomClient.TunnelName(url) is { } name ? $"{name}-{RoomPin}" : null;
+
+    private const int MaxWrongPins = 30;                        // tentativas erradas toleradas…
+    private static readonly TimeSpan PinWindow = TimeSpan.FromMinutes(5);   // …neste intervalo, antes de bloquear
+    private readonly object _pinLock = new();
+    private int _wrongPins;
+    private DateTime _pinWindowStart = DateTime.UtcNow;
+    private DateTime _pinBlockedUntil;
+
+    /// <summary>Confere a chave de quem quer entrar: a chave longa do link ou a senha curta do código.</summary>
+    private bool ViewerKeyMatches(string? provided)
+    {
+        if (KeyMatches(provided, ViewKey)) return true;
+        if (provided == null || provided.Length != RoomPin.Length) return false;   // nem parece a senha curta
+
+        lock (_pinLock)
+        {
+            var now = DateTime.UtcNow;
+            if (now < _pinBlockedUntil) return false;
+            if (now - _pinWindowStart > PinWindow)
+            {
+                _pinWindowStart = now;
+                _wrongPins = 0;
+            }
+            if (KeyMatches(provided, RoomPin)) return true;
+            if (++_wrongPins >= MaxWrongPins)
+            {
+                // Alguém está chutando: a entrada por código para por um tempo (o link continua valendo).
+                _pinBlockedUntil = now + PinWindow;
+                _wrongPins = 0;
+                Tools.Log("Muitas tentativas erradas de código: entrada por código bloqueada por 5 minutos.");
+            }
+            return false;
+        }
+    }
+
+    private static string NewPin() => RandomNumberGenerator.GetInt32(0, 1_000_000).ToString("D6");
+
+    public int ViewerCount => _people.Values.Count(p => !p.IsHost && !IsHiddenCompanion(p));
+
+    /// <summary>Sala de outra pessoa em que este app entrou (null = usando a própria sala).</summary>
+    public RoomClient? Joined { get; private set; }
+
+    /// <summary>
+    /// A conexão que o app de um convidado usa para enviar a tela ("companheira") não aparece na
+    /// lista de pessoas quando a página da sala do mesmo PC também está conectada: são uma pessoa só.
+    /// Sozinha ela aparece normalmente, para ninguém ficar na sala sem ser visto.
+    /// </summary>
+    private bool IsHiddenCompanion(Participant p) =>
+        p.IsCompanion && p.Device != "" && _people.Values.Any(o => !o.IsCompanion && o.Device == p.Device);
 
     public StreamServer(int port, string webRoot)
     {
@@ -103,11 +183,16 @@ public sealed class StreamServer : IAsyncDisposable
         {
             var h = ctx.Response.Headers;
             h.ContentSecurityPolicy =
-                "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; " +
-                "connect-src 'self' ws: wss:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'; object-src 'none'";
+                "default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline'; " +
+                "img-src 'self' data: blob:; media-src 'self' blob: mediastream:; connect-src 'self' ws: wss:; " +
+                // frame-src: o app mostra a sala de outra pessoa (pelo túnel) dentro da própria janela.
+                // frame-ancestors: e a nossa sala pode ser mostrada dentro do app de um convidado (localhost dele).
+                "frame-src 'self' https://*.trycloudflare.com; frame-ancestors 'self' http://localhost:*; " +
+                "base-uri 'none'; form-action 'none'; object-src 'none'";
             h.XContentTypeOptions = "nosniff";
             h["Referrer-Policy"] = "no-referrer";
-            h["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()";
+            // display-capture: os convidados podem compartilhar a tela; câmera e microfone continuam bloqueados.
+            h["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), display-capture=(self)";
             await next();
         });
 
@@ -122,6 +207,9 @@ public sealed class StreamServer : IAsyncDisposable
         });
 
         MapHostApi(app);
+        // O app de um convidado confere a chave antes de insistir na conexão: 204 = vale, 401 = código/link errado.
+        app.MapGet("/api/check", (HttpContext ctx) =>
+            ViewerKeyMatches(ctx.Request.Query["k"]) ? Results.NoContent() : Results.Unauthorized());
         app.Map("/ws", HandleWebSocket);
 
         try
@@ -158,10 +246,48 @@ public sealed class StreamServer : IAsyncDisposable
                 kbps = Math.Round(kbps),
                 viewers = ViewerCount,
                 maxViewers = MaxViewers,
+                allowShare = AllowGuestShare,
+                guestStreams = _streams.Values.Count(s => s.No != HostStreamNo),
                 publicUrl = publicUrl == null ? null : $"{publicUrl}/?k={ViewKey}",
                 tunnelStatus = Tunnel?.Status ?? "Desativado",
-                previewUrl = $"/?preview=1&t={HostToken}",
+                code = RoomCode,
+                roomUrl = $"/?embedded=1&t={HostToken}",
+                joined = Joined == null ? null : new
+                {
+                    state = Joined.State,
+                    message = Joined.Message,
+                    roomUrl = Joined.RoomPageUrl,
+                    origin = Joined.Origin,
+                },
             });
+        });
+
+        // Entrar na sala de outra pessoa: a transmissão deste app passa a ir para lá.
+        app.MapPost("/api/join", async (HttpContext ctx) =>
+        {
+            if (!IsHost(ctx) || Broadcaster == null) return Results.Unauthorized();
+            var body = await ctx.Request.ReadFromJsonAsync<JsonObject>();
+            var link = body?["url"]?.GetValue<string>() ?? "";
+            var name = CleanName(body?["name"]?.GetValue<string>(), isHost: false);
+
+            if (RoomCode != null && string.Equals(link.Trim(), RoomCode, StringComparison.OrdinalIgnoreCase))
+                return Results.Json(new { error = "Esse é o código da sua própria sala." }, statusCode: 400);
+
+            var client = RoomClient.TryCreate(link, name, out var error);
+            if (client == null) return Results.Json(new { error }, statusCode: 400);
+
+            await LeaveJoinedRoomAsync();
+            client.PublishRejected += reason => _ = Broadcaster.StopWithMessageAsync(reason);
+            Joined = client;
+            await Broadcaster.SetSinkAsync(client);
+            return Results.Ok();
+        });
+
+        app.MapPost("/api/leave", async (HttpContext ctx) =>
+        {
+            if (!IsHost(ctx) || Broadcaster == null) return Results.Unauthorized();
+            await LeaveJoinedRoomAsync();
+            return Results.Ok();
         });
 
         app.MapGet("/api/sources", (HttpContext ctx) =>
@@ -175,6 +301,21 @@ public sealed class StreamServer : IAsyncDisposable
             if (!IsHost(ctx)) return Results.Unauthorized();
             var jpeg = await Thumbnails.GetAsync(ctx.Request.Query["id"].ToString());
             return jpeg == null ? Results.NotFound() : Results.File(jpeg, "image/jpeg");
+        });
+
+        // Quais codificadores este PC tem (a interface marca os indisponíveis).
+        app.MapGet("/api/encoders", async (HttpContext ctx) =>
+        {
+            if (!IsHost(ctx)) return Results.Unauthorized();
+            try
+            {
+                var available = await VideoCapture.ProbeEncodersAsync(await Tools.EnsureFfmpegAsync());
+                return Results.Json(VideoCapture.EncoderList.Select(e => new { id = e.Id, label = e.Label, available = available.GetValueOrDefault(e.Id) }));
+            }
+            catch (Exception ex)
+            {
+                return Results.Problem(ex.Message);
+            }
         });
 
         app.MapPost("/api/start", async (HttpContext ctx) =>
@@ -204,9 +345,31 @@ public sealed class StreamServer : IAsyncDisposable
         {
             if (!IsHost(ctx)) return Results.Unauthorized();
             if (!int.TryParse(ctx.Request.Query["n"], out var n)) return Results.BadRequest();
-            MaxViewers = Math.Clamp(n, 1, 50);
+            MaxViewers = Math.Clamp(n, 0, 500);
             return Results.Ok();
         });
+
+        app.MapPost("/api/allow-share", (HttpContext ctx) =>
+        {
+            if (!IsHost(ctx)) return Results.Unauthorized();
+            SetAllowGuestShare(ctx.Request.Query["on"] == "1");
+            return Results.Ok();
+        });
+
+        app.MapPost("/api/open-log", (HttpContext ctx) =>
+        {
+            if (!IsHost(ctx)) return Results.Unauthorized();
+            Tools.Log("Log aberto pelo usuário.");
+            Process.Start(new ProcessStartInfo("notepad.exe") { ArgumentList = { Tools.LogPath }, UseShellExecute = false });
+            return Results.Ok();
+        });
+    }
+
+    private async Task LeaveJoinedRoomAsync()
+    {
+        if (Broadcaster != null) await Broadcaster.SetSinkAsync(this);
+        Joined?.Dispose();
+        Joined = null;
     }
 
     // Pelo túnel as requisições também chegam de 127.0.0.1, por isso o token é obrigatório.
@@ -219,45 +382,143 @@ public sealed class StreamServer : IAsyncDisposable
         provided != null &&
         CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(provided), Encoding.UTF8.GetBytes(expected));
 
-    /// <summary>Gera um link novo e desconecta todos os espectadores atuais (ex.: o link vazou).</summary>
+    /// <summary>Gera um link novo e desconecta todos os convidados (ex.: o link vazou).</summary>
     public void RotateViewKey()
     {
         ViewKey = NewToken(12);
-        foreach (var v in _viewers.Values.Where(v => !v.IsPreview))
+        RoomPin = NewPin();
+        foreach (var p in _people.Values.Where(p => !p.IsHost))
         {
-            v.EnqueueText("""{"type":"expired"}""");
-            _ = Task.Delay(500).ContinueWith(_ => v.Abort());
+            p.EnqueueText("""{"type":"expired"}""");
+            _ = Task.Delay(500).ContinueWith(_ => p.Abort());
         }
     }
 
-    // ---------- Distribuição da mídia ----------
+    private void SetAllowGuestShare(bool allow)
+    {
+        AllowGuestShare = allow;
+        if (!allow)
+        {
+            foreach (var s in _streams.Values.Where(s => s.No != HostStreamNo))
+                RemoveStream(s, "O anfitrião desativou o compartilhamento de tela dos convidados.");
+        }
+        BroadcastRoom();
+    }
 
-    public static byte[] BuildPacket(byte kind, bool key, long timestampMicros, byte[] data)
+    // ---------- Transmissão do próprio app (stream 0) ----------
+
+    public static byte[] BuildPacket(byte kind, bool key, long timestampMicros, byte[] data, ushort streamNo = HostStreamNo)
     {
         var packet = new byte[HeaderSize + data.Length];
         packet[0] = kind;
         packet[1] = (byte)(key ? 1 : 0);
-        BitConverter.TryWriteBytes(packet.AsSpan(2, 8), (double)timestampMicros);
+        BitConverter.TryWriteBytes(packet.AsSpan(2, 2), streamNo);
+        BitConverter.TryWriteBytes(packet.AsSpan(4, 8), (double)timestampMicros);
         Buffer.BlockCopy(data, 0, packet, HeaderSize, data.Length);
         return packet;
     }
 
-    public void PublishConfig(string config)
+    /// <summary>O app começou (ou mudou) a transmissão. <paramref name="config"/> = { video: {codec}, audio: {...}|null }.</summary>
+    public void PublishConfig(JsonObject config)
     {
-        _config = config;
-        foreach (var v in _viewers.Values) v.SendConfig(config);
+        var stream = _streams.GetOrAdd(HostStreamNo, _ => new RoomStream(HostStreamNo, ownerId: ""));
+        stream.SetConfig(config);
+        foreach (var p in _people.Values) p.SendConfigIfWatching(stream);
+        BroadcastRoom();
     }
 
     public void PublishOffline()
     {
-        if (_config == null) return;
-        _config = null;
-        foreach (var v in _viewers.Values) v.EnqueueText("""{"type":"offline"}""");
+        if (_streams.TryGetValue(HostStreamNo, out var stream)) RemoveStream(stream, null);
     }
 
     public void PublishMedia(byte[] packet, bool isVideo, bool isKey)
     {
-        foreach (var v in _viewers.Values) v.OfferMedia(packet, isVideo, isKey);
+        if (_streams.TryGetValue(HostStreamNo, out var stream)) FanOut(stream, packet, isVideo, isKey);
+    }
+
+    public void PublishThumbnail(byte[] jpeg)
+    {
+        if (_streams.TryGetValue(HostStreamNo, out var stream)) SetThumbnail(stream, BuildPacket(KindThumb, false, 0, jpeg));
+    }
+
+    // ---------- Sala ----------
+
+    private void FanOut(RoomStream stream, byte[] packet, bool isVideo, bool isKey)
+    {
+        var needKey = false;
+        // O mesmo cadeado de StartWatching: quem começa a assistir recebe o trecho guardado
+        // e, em seguida, exatamente os pacotes seguintes (sem buraco nem repetição).
+        lock (stream.Sync)
+        {
+            if (isVideo) stream.Remember(packet, isKey);
+            foreach (var p in _people.Values)
+            {
+                if (p.Id != stream.OwnerId && p.OfferMedia(stream.No, packet, isVideo, isKey)) needKey = true;
+            }
+        }
+        // Alguém entrou agora ou ficou para trás: pede um quadro-chave ao convidado que transmite.
+        // (A transmissão do app já manda quadros-chave em intervalo fixo.)
+        if (needKey && stream.OwnerId != "" && stream.ShouldRequestKeyframe() &&
+            _people.TryGetValue(stream.OwnerId, out var owner))
+        {
+            owner.EnqueueText("""{"type":"keyframe"}""");
+        }
+    }
+
+    private void SetThumbnail(RoomStream stream, byte[] packet)
+    {
+        stream.Thumb = packet;
+        foreach (var p in _people.Values) p.EnqueueDroppable(packet);
+    }
+
+    private void RemoveStream(RoomStream stream, string? reasonForOwner)
+    {
+        if (!_streams.TryRemove(stream.No, out _)) return;
+        foreach (var p in _people.Values)
+        {
+            p.StopWatching(stream.No);
+            if (p.Id == stream.OwnerId)
+            {
+                p.Publishing = null;
+                if (reasonForOwner != null)
+                    p.EnqueueText(new JsonObject { ["type"] = "unpublished", ["reason"] = reasonForOwner }.ToJsonString());
+            }
+        }
+        BroadcastRoom();
+    }
+
+    private string HostName => _people.Values.FirstOrDefault(p => p.IsHost)?.Name ?? "Anfitrião";
+
+    private void BroadcastRoom()
+    {
+        var people = new JsonArray();
+        foreach (var p in _people.Values.Where(p => !IsHiddenCompanion(p)).OrderBy(p => p.JoinedAt))
+            people.Add(new JsonObject { ["id"] = p.Id, ["name"] = p.Name, ["host"] = p.IsHost });
+
+        var streams = new JsonArray();
+        foreach (var s in _streams.Values.OrderBy(s => s.No))
+        {
+            _people.TryGetValue(s.OwnerId, out var owner);
+            // Tela enviada pelo app de um convidado: usa o nome que ele escolheu na página da sala.
+            var person = owner is { IsCompanion: true }
+                ? _people.Values.FirstOrDefault(o => !o.IsCompanion && o.Device == owner.Device) ?? owner
+                : owner;
+            var name = s.OwnerId == "" ? HostName : person?.Name ?? "?";
+            streams.Add(new JsonObject
+            {
+                ["no"] = s.No, ["owner"] = s.OwnerId, ["dev"] = owner?.Device ?? "", ["name"] = name, ["audio"] = s.HasAudio,
+            });
+        }
+
+        var msg = new JsonObject
+        {
+            ["type"] = "room",
+            ["people"] = people,
+            ["streams"] = streams,
+            ["canShare"] = AllowGuestShare,
+        }.ToJsonString();
+        foreach (var p in _people.Values) p.EnqueueText(msg);
     }
 
     private async Task HandleWebSocket(HttpContext ctx)
@@ -269,11 +530,11 @@ public sealed class StreamServer : IAsyncDisposable
         }
 
         var role = ctx.Request.Query["role"].ToString();
-        // A prévia (dentro da janela do app) não conta no limite, então exige o token do app.
+        // "host" é a sala embutida na janela do app: não conta no limite e exige o token do app.
         var allowed = role switch
         {
-            "viewer" => KeyMatches(ctx.Request.Query["k"], ViewKey),
-            "preview" => IsHost(ctx),
+            "viewer" => ViewerKeyMatches(ctx.Request.Query["k"]),
+            "host" => IsHost(ctx),
             _ => false,
         };
         if (!allowed)
@@ -282,25 +543,196 @@ public sealed class StreamServer : IAsyncDisposable
             return;
         }
 
-        var viewer = new Viewer(NewToken(6), await ctx.WebSockets.AcceptWebSocketAsync(), isPreview: role == "preview");
-        if (!viewer.IsPreview && ViewerCount >= MaxViewers)
+        // "dev" liga as conexões de um mesmo PC (app + página da sala); "pub" marca a conexão do app que envia a tela.
+        var device = ctx.Request.Query["dev"].ToString();
+        if (!DevicePattern().IsMatch(device)) device = "";
+        var companion = role == "viewer" && device != "" && ctx.Request.Query["pub"] == "1";
+
+        // Pelo túnel todo mundo chega como 127.0.0.1; o endereço real vem neste cabeçalho, posto pela Cloudflare.
+        var ip = role == "viewer" ? ctx.Request.Headers["CF-Connecting-IP"].ToString() : "";
+
+        var me = new Participant(NewToken(6), await ctx.WebSockets.AcceptWebSocketAsync(), isHost: role == "host")
         {
-            viewer.EnqueueText("""{"type":"full"}""");
-            await viewer.RunSendLoopAsync(closeWhenEmpty: true);
+            Device = device,
+            IsCompanion = companion,
+            Ip = ip,
+        };
+        if (ip != "" && _removedIps.ContainsKey(ip))
+        {
+            me.EnqueueText("""{"type":"removed"}""");
+            await me.RunSendLoopAsync(closeWhenEmpty: true);
             return;
         }
-        _viewers[viewer.Id] = viewer;
-        _ = viewer.RunSendLoopAsync();
+        if (!me.IsHost && MaxViewers > 0 && ViewerCount >= MaxViewers)
+        {
+            me.EnqueueText("""{"type":"full"}""");
+            await me.RunSendLoopAsync(closeWhenEmpty: true);
+            return;
+        }
 
-        var config = _config;
-        viewer.EnqueueText($$"""{"type":"hello","live":{{(config != null ? "true" : "false")}}}""");
-        if (config != null) viewer.SendConfig(config);
+        _people[me.Id] = me;
+        _ = me.RunSendLoopAsync();
+        me.EnqueueText(new JsonObject { ["type"] = "hello", ["id"] = me.Id, ["host"] = me.IsHost }.ToJsonString());
+        foreach (var s in _streams.Values)
+        {
+            if (s.Thumb is { } thumb) me.EnqueueDroppable(thumb);
+        }
+        BroadcastRoom();
 
-        // O espectador não manda nada; só esperamos a conexão fechar.
-        await viewer.WaitForCloseAsync();
+        try
+        {
+            await foreach (var (data, isText) in me.ReceiveAllAsync(MaxTextBytes, MaxMediaBytes))
+            {
+                if (isText) OnTextMessage(me, data);
+                else OnBinaryMessage(me, data);
+            }
+        }
+        catch (Exception ex)
+        {
+            Tools.Log($"Conexão de participante encerrada por erro: {ex.Message}");
+        }
 
-        _viewers.TryRemove(viewer.Id, out _);
-        viewer.Abort();
+        _people.TryRemove(me.Id, out _);
+        me.Abort();
+        if (me.Publishing is { } mine) RemoveStream(mine, null);
+        BroadcastRoom();
+    }
+
+    [GeneratedRegex(@"^[0-9a-f]{8,32}$")]
+    private static partial Regex DevicePattern();
+
+    [GeneratedRegex(@"^(avc1\.[0-9a-fA-F]{6}|vp8|vp09\.\d\d\.\d\d\.\d\d|av01\.[0-9A-Za-z.]{5,24})$")]
+    private static partial Regex VideoCodecPattern();
+
+    private void OnTextMessage(Participant me, byte[] data)
+    {
+        JsonNode? msg;
+        try { msg = JsonNode.Parse(data); } catch { return; }
+        if (msg is not JsonObject) return;
+
+        string? Str(string key) => msg[key] is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
+        ushort? StreamNo() => msg["stream"] is JsonValue v && v.TryGetValue<int>(out var n) && n is >= 0 and <= ushort.MaxValue ? (ushort)n : null;
+
+        switch (Str("type"))
+        {
+            case "hello":
+            case "name":
+                me.Name = CleanName(Str("name"), me.IsHost);
+                BroadcastRoom();
+                break;
+
+            case "watch":
+                if (StreamNo() is { } w && _streams.TryGetValue(w, out var toWatch) && toWatch.OwnerId != me.Id)
+                {
+                    me.StartWatching(toWatch);
+                    if (toWatch.OwnerId != "" && toWatch.ShouldRequestKeyframe() && _people.TryGetValue(toWatch.OwnerId, out var owner))
+                        owner.EnqueueText("""{"type":"keyframe"}""");
+                }
+                break;
+
+            case "unwatch":
+                if (StreamNo() is { } u) me.StopWatching(u);
+                break;
+
+            case "publish":
+                StartGuestStream(me, msg);
+                break;
+
+            case "unpublish":
+                if (me.Publishing is { } mine) RemoveStream(mine, null);
+                break;
+
+            case "remove":   // só o anfitrião remove alguém da sala
+                if (me.IsHost && Str("id") is { } targetId && _people.TryGetValue(targetId, out var target) && !target.IsHost)
+                    RemovePerson(target);
+                break;
+
+            case "kick":   // só o anfitrião encerra a tela de outra pessoa
+                if (me.IsHost && StreamNo() is { } k && k != HostStreamNo && _streams.TryGetValue(k, out var victim))
+                    RemoveStream(victim, "O anfitrião encerrou o seu compartilhamento.");
+                break;
+        }
+    }
+
+    /// <summary>Tira alguém da sala: desconecta (a página e o app do mesmo PC) e impede de voltar nesta sessão.</summary>
+    private void RemovePerson(Participant target)
+    {
+        var same = _people.Values
+            .Where(p => !p.IsHost && (p.Id == target.Id || (target.Device != "" && p.Device == target.Device) || (target.Ip != "" && p.Ip == target.Ip)))
+            .ToList();
+        foreach (var p in same)
+        {
+            if (p.Ip != "") _removedIps[p.Ip] = true;
+            p.EnqueueText("""{"type":"removed"}""");
+            _ = Task.Delay(400).ContinueWith(_ => p.Abort());
+        }
+        Tools.Log($"Anfitrião removeu '{target.Name}' da sala.");
+    }
+
+    private void StartGuestStream(Participant me, JsonNode msg)
+    {
+        string? deny = null;
+        if (!AllowGuestShare) deny = "O anfitrião não liberou o compartilhamento de tela.";
+        else if (me.Publishing != null) deny = "Você já está compartilhando.";
+        else if (_streams.Count >= MaxStreams) deny = $"A sala já tem {MaxStreams} telas compartilhadas.";
+
+        // Só aceitamos formatos conhecidos; o texto do codec é repassado aos outros navegadores.
+        var codec = msg["video"]?["codec"] is JsonValue cv && cv.TryGetValue<string>(out var c) ? c : null;
+        if (deny == null && (codec == null || !VideoCodecPattern().IsMatch(codec))) deny = "Formato de vídeo não suportado.";
+
+        JsonObject? audio = null;
+        if (deny == null && msg["audio"] is JsonObject a &&
+            a["sampleRate"] is JsonValue sr && sr.TryGetValue<int>(out var rate) && rate is >= 8000 and <= 96000 &&
+            a["numberOfChannels"] is JsonValue ch && ch.TryGetValue<int>(out var channels) && channels is 1 or 2)
+        {
+            audio = new JsonObject { ["codec"] = "opus", ["sampleRate"] = rate, ["numberOfChannels"] = channels };
+        }
+
+        if (deny != null)
+        {
+            me.EnqueueText(new JsonObject { ["type"] = "unpublished", ["reason"] = deny }.ToJsonString());
+            return;
+        }
+
+        var stream = new RoomStream((ushort)Interlocked.Increment(ref _nextStreamNo), me.Id);
+        stream.SetConfig(new JsonObject { ["video"] = new JsonObject { ["codec"] = codec }, ["audio"] = audio });
+        _streams[stream.No] = stream;
+        me.Publishing = stream;
+        me.EnqueueText(new JsonObject { ["type"] = "published", ["stream"] = stream.No }.ToJsonString());
+        BroadcastRoom();
+    }
+
+    private void OnBinaryMessage(Participant me, byte[] data)
+    {
+        var stream = me.Publishing;
+        if (stream == null || data.Length <= HeaderSize) return;
+
+        if (!me.AllowBytes(data.Length, MaxPublishBytesPerSecond))
+        {
+            RemoveStream(stream, "Seu compartilhamento foi encerrado: taxa de envio alta demais.");
+            return;
+        }
+
+        BitConverter.TryWriteBytes(data.AsSpan(2, 2), stream.No);   // nunca confiamos no número enviado
+        switch (data[0])
+        {
+            case KindVideo:
+                FanOut(stream, data, isVideo: true, isKey: (data[1] & 1) != 0);
+                break;
+            case KindAudio:
+                if (stream.HasAudio) FanOut(stream, data, isVideo: false, isKey: false);
+                break;
+            case KindThumb:
+                if (data.Length <= MaxThumbBytes && me.AllowThumbnail()) SetThumbnail(stream, data);
+                break;
+        }
+    }
+
+    private static string CleanName(string? name, bool isHost)
+    {
+        var clean = new string((name ?? "").Where(ch => !char.IsControl(ch)).ToArray()).Trim();
+        if (clean.Length > 24) clean = clean[..24].Trim();
+        return clean.Length > 0 ? clean : isHost ? "Anfitrião" : "Convidado";
     }
 
     private static string NewToken(int bytes) =>
@@ -316,8 +748,75 @@ public sealed class StreamServer : IAsyncDisposable
         }
     }
 
-    /// <summary>Espectador: WebSocket com fila de envio própria, para que um cliente lento não trave os outros.</summary>
-    private sealed class Viewer(string id, WebSocket socket, bool isPreview)
+    /// <summary>Uma tela compartilhada na sala (a do app tem dono "" e número 0).</summary>
+    private sealed class RoomStream(ushort no, string ownerId)
+    {
+        private long _lastKeyRequest;
+
+        public ushort No { get; } = no;
+        public string OwnerId { get; } = ownerId;
+        public bool HasAudio { get; private set; }
+
+        /// <summary>Mensagem "config" pronta para enviar a quem começa a assistir.</summary>
+        public string ConfigMessage { get; private set; } = "";
+
+        /// <summary>Última miniatura, já como pacote.</summary>
+        public volatile byte[]? Thumb;
+
+        /// <summary>Protege o trecho guardado e a ordem de entrega dos pacotes desta transmissão.</summary>
+        public object Sync { get; } = new();
+
+        // Vídeo desde o último quadro-chave. Quem abre a tela recebe isso na hora: a imagem aparece
+        // imediatamente, mesmo que a tela esteja parada (sem movimento a captura não gera quadros novos).
+        private readonly List<byte[]> _recent = [];
+        private long _recentBytes;
+        private const long MaxRecentBytes = 12 * 1024 * 1024;
+
+        public void Remember(byte[] packet, bool isKey)
+        {
+            if (isKey)
+            {
+                _recent.Clear();
+                _recentBytes = 0;
+            }
+            else if (_recent.Count == 0 || _recentBytes > MaxRecentBytes)
+            {
+                return;   // ainda sem quadro-chave, ou trecho grande demais: espera o próximo
+            }
+            _recent.Add(packet);
+            _recentBytes += packet.Length;
+        }
+
+        public IReadOnlyList<byte[]> Recent => _recentBytes > MaxRecentBytes ? [] : _recent;
+
+        public void SetConfig(JsonObject config)
+        {
+            lock (Sync)
+            {
+                _recent.Clear();   // formato novo: o trecho antigo não serve mais
+                _recentBytes = 0;
+            }
+            HasAudio = config["audio"] is JsonObject;
+            ConfigMessage = new JsonObject
+            {
+                ["type"] = "config",
+                ["stream"] = No,
+                ["video"] = config["video"]?.DeepClone(),
+                ["audio"] = config["audio"]?.DeepClone(),
+            }.ToJsonString();
+        }
+
+        /// <summary>No máximo um pedido de quadro-chave a cada 700 ms.</summary>
+        public bool ShouldRequestKeyframe()
+        {
+            var now = Environment.TickCount64;
+            var last = Interlocked.Read(ref _lastKeyRequest);
+            return now - last >= 700 && Interlocked.CompareExchange(ref _lastKeyRequest, now, last) == last;
+        }
+    }
+
+    /// <summary>Alguém conectado à sala: WebSocket com fila de envio própria, para que um cliente lento não trave os outros.</summary>
+    private sealed class Participant(string id, WebSocket socket, bool isHost)
     {
         private readonly record struct Item(byte[] Data, bool IsText, long Generation);
 
@@ -325,38 +824,99 @@ public sealed class StreamServer : IAsyncDisposable
         private long _queuedBytes;
         private long _generation;
 
+        // Transmissões que este participante está assistindo → "esperando quadro-chave?".
         // Um decodificador só consegue começar num quadro-chave.
-        private volatile bool _waitingForKey = true;
+        private readonly ConcurrentDictionary<ushort, bool> _watching = new();
+
+        // Controle de taxa do que ele envia.
+        private long _windowStart = Environment.TickCount64;
+        private long _windowBytes;
+        private long _lastThumb;
 
         public string Id { get; } = id;
-        public bool IsPreview { get; } = isPreview;
+        public bool IsHost { get; } = isHost;
+        public DateTime JoinedAt { get; } = DateTime.UtcNow;
+        public string Name { get; set; } = isHost ? "Anfitrião" : "Convidado";
+        public RoomStream? Publishing { get; set; }
+
+        /// <summary>Identificador do PC, quando o participante usa o app ("" no navegador).</summary>
+        public string Device { get; init; } = "";
+
+        /// <summary>Conexão do app que só envia a tela (a pessoa aparece pela página da sala).</summary>
+        public bool IsCompanion { get; init; }
+
+        /// <summary>Endereço de internet de quem entrou pelo link ("" para conexões deste PC).</summary>
+        public string Ip { get; init; } = "";
 
         public void EnqueueText(string text) => Enqueue(Encoding.UTF8.GetBytes(text), true, droppable: false);
 
-        public void SendConfig(string config)
+        public void EnqueueDroppable(byte[] packet)
         {
-            _waitingForKey = true;
-            EnqueueText(config);
+            if (Interlocked.Read(ref _queuedBytes) <= BacklogLimit) Enqueue(packet, false, droppable: true);
         }
 
-        public void OfferMedia(byte[] packet, bool isVideo, bool isKey)
+        public void StartWatching(RoomStream stream)
         {
-            if (_waitingForKey)
+            lock (stream.Sync)
             {
-                if (!isVideo || !isKey) return;
-                _waitingForKey = false;
+                EnqueueText(stream.ConfigMessage);
+                var recent = stream.Recent;
+                foreach (var packet in recent) Enqueue(packet, isText: false, droppable: true);
+                // Com o trecho guardado ele já começa num quadro-chave; sem ele, espera o próximo.
+                _watching[stream.No] = recent.Count == 0;
+            }
+        }
+
+        public void StopWatching(ushort no) => _watching.TryRemove(no, out _);
+
+        /// <summary>A transmissão mudou de formato: quem assiste recebe a config nova e recomeça num quadro-chave.</summary>
+        public void SendConfigIfWatching(RoomStream stream)
+        {
+            if (_watching.ContainsKey(stream.No)) StartWatching(stream);
+        }
+
+        /// <summary>Enfileira um pacote se este participante assiste à transmissão. Retorna true se ele precisa de um quadro-chave.</summary>
+        public bool OfferMedia(ushort no, byte[] packet, bool isVideo, bool isKey)
+        {
+            if (!_watching.TryGetValue(no, out var waitingForKey)) return false;
+            if (waitingForKey)
+            {
+                if (!isVideo || !isKey) return isVideo;
+                _watching.TryUpdate(no, false, true);
             }
 
-            if (Interlocked.Read(ref _queuedBytes) > ViewerBacklogLimit)
+            if (Interlocked.Read(ref _queuedBytes) > BacklogLimit)
             {
-                // Internet do espectador não está dando conta: descarta o atraso e
-                // recomeça no próximo quadro-chave (no máximo 1 s depois).
+                // A internet dele não está dando conta: descarta o atraso e recomeça no próximo quadro-chave.
                 Interlocked.Increment(ref _generation);
-                _waitingForKey = true;
-                return;
+                foreach (var key in _watching.Keys) _watching[key] = true;
+                return true;
             }
 
             Enqueue(packet, isText: false, droppable: true);
+            return false;
+        }
+
+        /// <summary>Conta os bytes recebidos dele no último segundo; false = passou do limite.</summary>
+        public bool AllowBytes(int count, long perSecond)
+        {
+            var now = Environment.TickCount64;
+            if (now - _windowStart >= 1000)
+            {
+                _windowStart = now;
+                _windowBytes = 0;
+            }
+            _windowBytes += count;
+            return _windowBytes <= perSecond * 2;   // tolera rajadas (quadros-chave)
+        }
+
+        /// <summary>No máximo uma miniatura por segundo.</summary>
+        public bool AllowThumbnail()
+        {
+            var now = Environment.TickCount64;
+            if (now - _lastThumb < 1000) return false;
+            _lastThumb = now;
+            return true;
         }
 
         private void Enqueue(byte[] data, bool isText, bool droppable)
@@ -388,18 +948,27 @@ public sealed class StreamServer : IAsyncDisposable
             }
         }
 
-        public async Task WaitForCloseAsync()
+        /// <summary>Lê mensagens completas; encerra se alguma passar do tamanho permitido.</summary>
+        public async IAsyncEnumerable<(byte[] Data, bool IsText)> ReceiveAllAsync(int maxText, int maxBinary)
         {
-            var buffer = new byte[1024];
-            try
+            var buffer = new byte[64 * 1024];
+            using var ms = new MemoryStream();
+            while (socket.State == WebSocketState.Open)
             {
-                while (socket.State == WebSocketState.Open)
-                {
-                    var r = await socket.ReceiveAsync(buffer, CancellationToken.None);
-                    if (r.MessageType == WebSocketMessageType.Close) break;
-                }
+                WebSocketReceiveResult r;
+                try { r = await socket.ReceiveAsync(buffer, CancellationToken.None); }
+                catch { yield break; }
+
+                if (r.MessageType == WebSocketMessageType.Close) yield break;
+                ms.Write(buffer, 0, r.Count);
+                var isText = r.MessageType == WebSocketMessageType.Text;
+                if (ms.Length > (isText ? maxText : maxBinary)) yield break;
+                if (!r.EndOfMessage) continue;
+
+                var data = ms.ToArray();
+                ms.SetLength(0);
+                yield return (data, isText);
             }
-            catch { }
         }
 
         public void Abort()
