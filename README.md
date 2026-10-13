@@ -56,20 +56,20 @@ powershell -ExecutionPolicy Bypass -File tools/build-installer.ps1
 
 1. Abra o **GameStream**. Na primeira vez ele baixa o `cloudflared` e o FFmpeg oficiais (~200 MB).
 2. Na tela **Transmissão**, escolha a **janela do jogo**. A predefinição **Recomendado** (720p, 30 fps) já vem escolhida; as outras opções ficam em **Configurações avançadas**.
-3. Clique em **▶ Iniciar transmissão**.
+3. Clique em **Iniciar transmissão**.
 4. Mande para os amigos o **código** (para quem tem o GameStream) ou o **link** (para abrir no navegador). Os dois ficam na lateral.
 
 **Criar uma sala (todos podem compartilhar)**
 
 1. No menu à esquerda, clique em **Salas**.
-2. Dê um nome e clique em **＋ Criar nova sala**. Ela fica salva em **Minhas salas**.
-3. Mande o código ou o link da sala para os amigos e clique em **Compartilhar minha tela na sala** quando quiser.
-4. **⬅ Salas** volta para a lista sem fechar a sala; **Encerrar sala** fecha, e ela continua salva para reabrir depois (com código novo).
+2. Clique em **Nova sala** e dê um nome. Ela fica salva em **Minhas salas**.
+3. Mande o código ou o link da sala para os amigos e clique em **Compartilhar minha tela** quando quiser.
+4. **← Salas** volta para a lista sem fechar a sala; **Encerrar sala** fecha, e ela continua salva para reabrir depois (com código novo).
 
 **Entrar na sala de um amigo**
 
 - **Pelo navegador:** abra o link no Chrome, Edge ou Safari atualizado. Para compartilhar a sua tela, clique em **🖥 Compartilhar minha tela** (Chrome ou Edge no computador).
-- **Pelo GameStream:** em **Salas**, escreva o seu nome (menu à esquerda), cole o código (ou o link) em **Entrar na sala de um amigo** e clique em **Entrar**. Depois escolha a janela do jogo e clique em **Compartilhar minha tela na sala**. As salas em que você entrou ficam em **Salas recentes**.
+- **Pelo GameStream:** em **Salas**, escreva o seu nome (menu à esquerda), cole o código (ou o link) em **Entrar na sala de um amigo** e clique em **Entrar**. Depois escolha a janela do jogo e clique em **Compartilhar minha tela**. As salas em que você entrou ficam em **Salas recentes**.
 
 Em qualquer um dos casos, clique numa miniatura para assistir àquela tela e em **🔊** para ligar o som (o navegador exige um clique para tocar áudio).
 

@@ -300,7 +300,7 @@ function toast(text) {
 
 function render() {
   // "Transmissão" (só quem criou transmite) ou "Sala" (todos podem compartilhar)
-  $('roomTitle').textContent = canShare ? `🎮 ${roomName || 'Sala'}` : '📡 Transmissão';
+  setLabel($('roomTitle'), canShare ? 'users' : 'radio', canShare ? roomName || 'Sala' : 'Transmissão');
 
   // Quem está na sala
   const box = $('people');
@@ -308,12 +308,14 @@ function render() {
   for (const p of people) {
     const chip = document.createElement('span');
     chip.className = 'chip' + (p.id === myId ? ' me' : '') + (p.host ? ' host' : '');
-    chip.textContent = p.name + (p.id === myId ? ' (você)' : '');
+    if (p.host) chip.append(icon('crown'));
+    chip.append(p.name + (p.id === myId ? ' (você)' : ''));
+    if (p.host) chip.title = 'Criou a sala';
     // Quem criou a sala pode tirar alguém dela.
     if (isHost && !p.host) {
       const remove = document.createElement('button');
       remove.className = 'chip-remove';
-      remove.textContent = '✕';
+      remove.append(icon('x'));
       remove.title = `Remover ${p.name} da sala`;
       remove.onclick = () => {
         if (confirm(`Remover ${p.name} da sala? A pessoa é desconectada e não consegue voltar enquanto o app estiver aberto.`)) {
@@ -340,7 +342,7 @@ function render() {
   $('shareQuality').hidden = $('shareBtn').hidden || sharing;
   $('shareBtn').disabled = !sharing && !SHARE_SUPPORTED;
   $('shareBtn').title = SHARE_SUPPORTED ? '' : 'Para compartilhar a tela, use o Chrome ou o Edge no computador.';
-  $('shareBtn').textContent = sharing ? '■ Parar de compartilhar' : '🖥 Compartilhar minha tela';
+  setLabel($('shareBtn'), sharing ? 'stop' : 'monitor', sharing ? 'Parar de compartilhar' : 'Compartilhar minha tela');
   $('shareBtn').className = sharing ? 'danger' : 'primary';
 }
 
@@ -390,14 +392,14 @@ function renderTiles() {
       img.alt = '';
       thumb.append(img);
     } else {
-      thumb.textContent = '🖥';
+      thumb.append(icon('monitor'));
     }
     const live = document.createElement('span');
     live.className = 'live-tag';
     live.textContent = 'AO VIVO';
     const hint = document.createElement('span');
     hint.className = 'expand-hint';
-    hint.textContent = own ? '⤢ Ver prévia ao vivo' : '⤢ Assistir';
+    hint.textContent = own ? 'Ver prévia ao vivo' : 'Assistir';
     thumb.append(live, hint);
 
     const meta = document.createElement('div');
@@ -414,7 +416,7 @@ function renderTiles() {
       const playing = s.no === watching && !muted && audioCtx?.state === 'running';
       const speaker = document.createElement('button');
       speaker.className = 'speaker' + (playing ? ' on' : '');
-      speaker.textContent = playing ? '🔊' : '🔇';
+      speaker.append(icon(playing ? 'volume' : 'volume-off'));
       speaker.title = playing ? `Silenciar ${s.name}` : `Ouvir ${s.name} (as outras telas ficam sem som)`;
       speaker.onclick = (e) => {
         e.stopPropagation();
@@ -431,7 +433,7 @@ function renderTiles() {
     if (isHost && s.owner !== '') {
       const kick = document.createElement('button');
       kick.className = 'kick';
-      kick.textContent = '✕';
+      kick.append(icon('x'));
       kick.title = `Encerrar o compartilhamento de ${s.name}`;
       kick.onclick = (e) => {
         e.stopPropagation();
@@ -676,7 +678,7 @@ function setMuted(value) {
   applyVolume();
   updateUnmuteHint();
   const name = watchedName();
-  $('muteBtn').textContent = muted ? '🔇 Som desligado' : name ? `🔊 Som de ${name}` : '🔊 Som ligado';
+  setLabel($('muteBtn'), muted ? 'volume-off' : 'volume', muted ? 'Som desligado' : name ? `Som de ${name}` : 'Som ligado');
   renderTiles();   // atualiza os alto-falantes das miniaturas
 }
 
