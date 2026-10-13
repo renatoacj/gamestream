@@ -21,6 +21,34 @@ public static class Tools
 
     private static readonly SemaphoreSlim FfmpegLock = new(1, 1);
 
+    // ---------- Log ----------
+
+    public static string LogPath { get; } = Path.Combine(DataDir, "gamestream.log");
+    private static readonly object LogLock = new();
+
+    /// <summary>
+    /// Registra diagnósticos (ex.: o erro exato do FFmpeg quando um codificador falha) num arquivo
+    /// que o usuário pode abrir pelo app e enviar junto com um relato de problema.
+    /// </summary>
+    public static void Log(string message)
+    {
+        try
+        {
+            lock (LogLock)
+            {
+                Directory.CreateDirectory(DataDir);
+                if (File.Exists(LogPath) && new FileInfo(LogPath).Length > 1024 * 1024) File.Delete(LogPath);
+                // UTF-8 com BOM: o Bloco de Notas e o PowerShell mostram os acentos corretamente.
+                if (!File.Exists(LogPath)) File.WriteAllText(LogPath, "", new System.Text.UTF8Encoding(true));
+                File.AppendAllText(LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}");
+            }
+        }
+        catch
+        {
+            // Log é só diagnóstico: nunca deve derrubar o app.
+        }
+    }
+
     /// <summary>Caminho do ffmpeg.exe, baixando se necessário. <paramref name="progress"/> recebe mensagens de status.</summary>
     public static async Task<string> EnsureFfmpegAsync(Action<string>? progress = null, CancellationToken token = default)
     {

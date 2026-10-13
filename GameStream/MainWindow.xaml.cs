@@ -1,5 +1,7 @@
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Interop;
 using Microsoft.Web.WebView2.Core;
 
 namespace GameStream;
@@ -14,6 +16,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        SourceInitialized += (_, _) => UseDarkTitleBar();
         Loaded += OnLoaded;
         Closed += async (_, _) =>
         {
@@ -22,6 +25,22 @@ public partial class MainWindow : Window
             if (_server != null) await _server.DisposeAsync();
         };
     }
+
+    /// <summary>Barra de título escura, na cor do app (em vez da barra branca padrão).</summary>
+    private void UseDarkTitleBar()
+    {
+        var hwnd = new WindowInteropHelper(this).Handle;
+        var on = 1;
+        DwmSetWindowAttribute(hwnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, ref on, sizeof(int));
+        // Windows 11: cor exata do fundo do app (#0f1115) e texto claro. No Windows 10 só o modo escuro acima vale.
+        var caption = 0x0015110F;   // COLORREF = 0x00BBGGRR
+        DwmSetWindowAttribute(hwnd, 35 /* DWMWA_CAPTION_COLOR */, ref caption, sizeof(int));
+        var text = 0x00EEE8E6;
+        DwmSetWindowAttribute(hwnd, 36 /* DWMWA_TEXT_COLOR */, ref text, sizeof(int));
+    }
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
@@ -63,13 +82,21 @@ public partial class MainWindow : Window
             };
             core.FrameNavigationStarting += (_, args) =>
             {
-                if (!args.Uri.StartsWith(appOrigin, StringComparison.OrdinalIgnoreCase)) args.Cancel = true;
+                // Além da própria interface, só a sala em que o usuário entrou (endereço validado em RoomClient).
+                var joined = _server.Joined?.Origin;
+                var allowed = args.Uri.StartsWith(appOrigin, StringComparison.OrdinalIgnoreCase) ||
+                              (joined != null && args.Uri.StartsWith(joined + "/", StringComparison.OrdinalIgnoreCase));
+                if (!allowed) args.Cancel = true;
             };
             core.NewWindowRequested += (_, args) => args.Handled = true;
             core.PermissionRequested += (_, args) => args.State = CoreWebView2PermissionState.Deny;
 
-            // localhost é "contexto seguro", necessário para o WebCodecs da prévia.
+            // localhost é "contexto seguro", necessário para o WebCodecs da sala.
             core.Navigate($"http://localhost:{port}/host.html?t={_server.HostToken}");
+#if DEBUG
+            // Só em compilações de desenvolvimento: permite testar a API de controle por script.
+            Tools.Log($"DEBUG controle: http://localhost:{port}/api/status?t={_server.HostToken}");
+#endif
         }
         catch (Exception ex)
         {
