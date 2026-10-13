@@ -11,7 +11,7 @@ const api = (path) => `/api/${path}?t=${HOST_TOKEN}`;
 const DEFAULTS = {
   height: 720, fps: 30, constantFps: true, cursor: true,
   encoder: 'auto', rateControl: 'cbr', bitrateKbps: 4500, preset: 'balanced',
-  keyframeSeconds: 1, profile: 'high', audioMode: 'window', audioKbps: 160, audioGainDb: 0,
+  keyframeSeconds: 1, profile: 'high', audioMode: 'window', audioKbps: 160, audioGainDb: 'auto',
 };
 
 const PRESETS = {
@@ -24,7 +24,7 @@ const PRESETS = {
 
 const settingEls = () => [...document.querySelectorAll('[data-setting]')];
 
-const PREFS_VERSION = 2;
+const PREFS_VERSION = 3;
 
 let shownUrl;
 let roomSrc = null;     // endereço carregado no quadro da sala
@@ -68,7 +68,7 @@ function savePrefs() {
 function loadPrefs() {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem('gamestream-settings') || '{}'); } catch { /* nada salvo */ }
-  // Versões antigas salvavam +6 dB como padrão de ganho; o padrão agora é 0 dB (sem alterar o volume).
+  // O padrão de ganho passou a ser "Automático": configurações salvas por versões antigas adotam o novo padrão.
   if (saved.v !== PREFS_VERSION) delete saved.audioGainDb;
   applySettings({ ...DEFAULTS, ...saved });
   // Primeira vez: "Recomendado". Depois: o que estava escolhido ("" = personalizado).
@@ -91,22 +91,26 @@ function updateAdvancedSummary() {
 $('profilePreset').onchange = () => {
   const p = PRESETS[$('profilePreset').value];
   if (p) applySettings(p);
-  else $('advanced').open = true;   // "Personalizado": abre as configurações para ajustar
+  else setAdvancedOpen(true);   // "Personalizado": abre as configurações para ajustar
   updateAdvancedSummary();
   savePrefs();
 };
 for (const el of settingEls()) {
   el.addEventListener('change', () => {
-    // Mexeu em vídeo/codificação: passa a ser "Personalizado" (áudio não faz parte das predefinições).
-    if (!el.id.startsWith('audio')) $('profilePreset').value = '';
+    $('profilePreset').value = '';   // mexeu em qualquer configuração avançada: passa a ser "Personalizado"
     updateAdvancedSummary();
     savePrefs();
   });
 }
-$('advanced').addEventListener('toggle', () => {
-  try { localStorage.setItem('gamestream-advanced-open', $('advanced').open ? '1' : '0'); } catch { /* sem armazenamento */ }
-});
-try { $('advanced').open = localStorage.getItem('gamestream-advanced-open') === '1'; } catch { /* sem armazenamento */ }
+
+function setAdvancedOpen(open, save = true) {
+  $('advanced').hidden = !open;
+  $('advancedBtn').classList.toggle('active', open);
+  $('advancedBtn').setAttribute('aria-expanded', String(open));
+  if (save) { try { localStorage.setItem('gamestream-advanced-open', open ? '1' : '0'); } catch { /* sem armazenamento */ } }
+}
+$('advancedBtn').onclick = () => setAdvancedOpen($('advanced').hidden);
+try { setAdvancedOpen(localStorage.getItem('gamestream-advanced-open') === '1', false); } catch { /* sem armazenamento */ }
 
 // ---------- Janelas e monitores (com miniaturas) ----------
 
@@ -195,7 +199,12 @@ $('picker').addEventListener('click', (e) => { if (e.target === $('picker')) $('
 
 async function updateMeter() {
   let db = null;
-  try { db = (await (await fetch(api('level'))).json()).db; } catch { /* app fechando */ }
+  let autoGain = null;
+  try {
+    const level = await (await fetch(api('level'))).json();
+    db = level.db;
+    autoGain = level.autoGainDb;
+  } catch { /* app fechando */ }
   const fill = $('meterFill');
   if (db === null || db === undefined) {
     fill.style.width = '0';
@@ -207,9 +216,19 @@ async function updateMeter() {
   fill.style.width = pct + '%';
   fill.className = db > -3 ? 'clip' : db > -12 ? 'hot' : '';
   $('meterDb').textContent = db <= -99 ? 'silêncio' : `${db.toFixed(0)} dB`;
+  // No automático, mostra quanto o app está aumentando o volume.
+  $('meterDb').title = autoGain === null || autoGain === undefined ? '' : `Ganho automático: +${autoGain} dB`;
 }
 
 // ---------- Início / parada ----------
+
+// O servidor recebe o ganho como número + um "automático" à parte.
+function settingsForServer() {
+  const s = { source: $('source').value, ...readSettings() };
+  s.audioAutoGain = s.audioGainDb === 'auto';
+  if (s.audioAutoGain) s.audioGainDb = 0;
+  return s;
+}
 
 async function start() {
   if (!$('source').value) {
@@ -221,7 +240,7 @@ async function start() {
   await fetch(api('start'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ source: $('source').value, ...readSettings() }),
+    body: JSON.stringify(settingsForServer()),
   });
   refresh();
 }
@@ -426,6 +445,17 @@ $('codeCopy').onclick = async () => {
   $('codeCopy').textContent = 'Copiado!';
   setTimeout(() => ($('codeCopy').textContent = 'Copiar'), 1500);
 };
+
+// ---------- Painel lateral recolhível ----------
+
+function setSideCollapsed(collapsed, save = true) {
+  document.body.classList.toggle('side-collapsed', collapsed);
+  $('sideShow').hidden = !collapsed;
+  if (save) { try { localStorage.setItem('gamestream-side-collapsed', collapsed ? '1' : '0'); } catch { /* sem armazenamento */ } }
+}
+$('sideHide').onclick = () => setSideCollapsed(true);
+$('sideShow').onclick = () => setSideCollapsed(false);
+try { setSideCollapsed(localStorage.getItem('gamestream-side-collapsed') === '1', false); } catch { /* sem armazenamento */ }
 
 // ---------- Controle do link ----------
 

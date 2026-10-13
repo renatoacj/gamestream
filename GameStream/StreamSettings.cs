@@ -39,4 +39,7 @@ public sealed record StreamSettings
 
     /// <summary>Ganho aplicado ao áudio antes de codificar (dB), com limitador para não distorcer.</summary>
     public int AudioGainDb { get; init; }
+
+    /// <summary>Ganho automático: o app leva o volume a um nível normal sozinho (ignora <see cref="AudioGainDb"/>).</summary>
+    public bool AudioAutoGain { get; init; } = true;
 }

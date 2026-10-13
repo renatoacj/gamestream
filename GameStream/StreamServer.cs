@@ -294,7 +294,9 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
             IsHost(ctx) ? Results.Json(CaptureSources.List()) : Results.Unauthorized());
 
         app.MapGet("/api/level", (HttpContext ctx) =>
-            IsHost(ctx) ? Results.Json(new { db = Broadcaster?.TakeAudioLevelDb() }) : Results.Unauthorized());
+            IsHost(ctx)
+                ? Results.Json(new { db = Broadcaster?.TakeAudioLevelDb(), autoGainDb = Broadcaster?.AutoGainDb })
+                : Results.Unauthorized());
 
         app.MapGet("/api/thumb", async (HttpContext ctx) =>
         {

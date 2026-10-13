@@ -43,6 +43,12 @@ public sealed class AudioCapture : IDisposable
         set => _gain = MathF.Pow(10, Math.Clamp(value, -20, 24) / 20f);
     }
 
+    /// <summary>Ganho automático: o app ajusta sozinho (ignora <see cref="GainDb"/>).</summary>
+    public bool AutoGain { get; init; }
+
+    /// <summary>Ganho que o modo automático está aplicando agora, em dB (para mostrar no painel).</summary>
+    public double CurrentAutoGainDb => 20 * Math.Log10(_autoGain);
+
     /// <summary>Pico (0..1) desde a última chamada; usado pelo medidor de nível.</summary>
     public float TakePeak()
     {
@@ -107,22 +113,62 @@ public sealed class AudioCapture : IDisposable
             while (offset < count)
             {
                 var take = Math.Min(count - offset, FrameValues - _frameFill);
-                for (var i = 0; i < take; i++)
-                {
-                    var v = Limit(samples[offset + i] * _gain);
-                    _frame[_frameFill + i] = v;
-                    var a = MathF.Abs(v);
-                    if (a > _peak) _peak = a;
-                }
+                Array.Copy(samples, offset, _frame, _frameFill, take);
                 _frameFill += take;
                 offset += take;
                 if (_frameFill == FrameValues)
                 {
                     _frameFill = 0;
+                    ApplyGain();
                     var len = _encoder!.Encode(_frame, FrameSamples, _packet, _packet.Length);
                     if (len > 0) Packet?.Invoke(_packet.AsSpan(0, len).ToArray());
                 }
             }
+        }
+    }
+
+    // ---------- Ganho (fixo ou automático) ----------
+
+    private const float AutoTarget = 0.30f;      // onde queremos os picos (~ -10 dB)
+    private const float AutoMaxGain = 31.6f;     // até +30 dB
+    private const float SilenceFloor = 0.0008f;  // abaixo de ~ -62 dB é silêncio: não mexe no ganho
+    private float _envelope;                     // pico recente do som original
+    private float _autoGain = 1f;
+
+    /// <summary>
+    /// Aplica o ganho ao quadro de 20 ms que está em <see cref="_frame"/>. No modo automático, acompanha os
+    /// picos do som original e ajusta o ganho para eles ficarem perto de -10 dB: sobe devagar (sem "bombear"
+    /// nos trechos calmos) e desce na hora quando o som fica alto. Muitos jogos saem bem baixos na captura.
+    /// </summary>
+    private void ApplyGain()
+    {
+        var gain = _gain;
+        if (AutoGain)
+        {
+            var framePeak = 0f;
+            for (var i = 0; i < FrameValues; i++)
+            {
+                var a = MathF.Abs(_frame[i]);
+                if (a > framePeak) framePeak = a;
+            }
+
+            // Envelope: sobe na hora, cai devagar (meia-vida de ~20 s) para lembrar do último som alto.
+            // Assim um trecho calmo do jogo não é amplificado de repente (o som de fundo não "respira").
+            _envelope = MathF.Max(framePeak, _envelope * 0.9993f);
+            if (_envelope > SilenceFloor)
+            {
+                var wanted = Math.Clamp(AutoTarget / _envelope, 1f, AutoMaxGain);
+                _autoGain = wanted < _autoGain ? wanted : _autoGain + (wanted - _autoGain) * 0.02f;
+            }
+            gain = _autoGain;
+        }
+
+        for (var i = 0; i < FrameValues; i++)
+        {
+            var v = Limit(_frame[i] * gain);
+            _frame[i] = v;
+            var a = MathF.Abs(v);
+            if (a > _peak) _peak = a;
         }
     }
 
