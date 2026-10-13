@@ -85,8 +85,9 @@
 
   /* Recolher / mostrar o painel lateral */
   .side-toggle { padding: 2px 9px; font-size: 16px; line-height: 22px; }
-  #sideHide { position: absolute; top: 12px; right: 12px; z-index: 1; }
-  aside h2:first-of-type, aside > div > h2:first-child { padding-right: 44px; }
+  /* O botão fica no canto esquerdo do painel, na divisa com a área principal; o primeiro título abre espaço para ele. */
+  #sideHide { position: absolute; top: 12px; left: 10px; z-index: 1; }
+  #hostSection > h2:first-child, #guestSection > h2:first-child { padding-left: 38px; line-height: 26px; }
   body.side-collapsed { grid-template-columns: 1fr; }
   body.side-collapsed aside { display: none; }
   aside h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 18px 0 8px; }
