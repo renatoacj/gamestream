@@ -5,7 +5,11 @@
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$app = Join-Path $root 'artifacts\app'
+# A compilação (centenas de arquivos) vai para uma pasta temporária, fora do projeto: se o projeto
+# estiver numa pasta sincronizada (OneDrive, Dropbox...), apagar e recriar tudo a cada build faz o
+# sincronizador reclamar de "exclusão em massa". Só o instalador final vai para artifacts/.
+$app = Join-Path ([IO.Path]::GetTempPath()) 'GameStream-build\app'
+New-Item -ItemType Directory -Force (Join-Path $root 'artifacts') | Out-Null
 
 $version = ([xml](Get-Content (Join-Path $root 'GameStream\GameStream.csproj'))).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
 if (-not $version) { $version = '0.1.0' }
@@ -47,7 +51,7 @@ function Sign-Files([string[]]$files) {
 $signed = Sign-Files @((Join-Path $app 'GameStream.exe'), (Join-Path $app 'GameStream.dll'))
 
 Write-Host 'Compilando o instalador...'
-& $iscc /Q "/DAppVersion=$version" (Join-Path $root 'installer\GameStream.iss')
+& $iscc /Q "/DAppVersion=$version" "/DAppDir=$app" (Join-Path $root 'installer\GameStream.iss')
 if ($LASTEXITCODE -ne 0) { throw 'Inno Setup falhou' }
 
 $setup = Join-Path $root "artifacts\GameStream-Setup-$version.exe"
