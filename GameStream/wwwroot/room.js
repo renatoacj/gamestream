@@ -256,6 +256,8 @@ function watch(no, byUser = true) {
   if (byUser) autoWatch = true;
   showOverlay('Conectando à transmissão…');
   send({ type: 'watch', stream: no });
+  loadVolumeForWatched();   // volume lembrado para esta pessoa
+  setMuted(muted);          // atualiza o texto do botão de som com o nome
   render();
 }
 
@@ -392,8 +394,28 @@ function renderTiles() {
     const name = document.createElement('b');
     name.textContent = s.name;
     const tag = document.createElement('small');
-    tag.textContent = mine ? 'você' : own ? (s.no === watching ? 'você' : 'você · prévia pausada') : s.audio ? '🔊' : '';
+    tag.textContent = mine ? 'você' : own ? (s.no === watching ? 'você' : 'você · prévia pausada') : '';
     meta.append(name, tag);
+
+    // Alto-falante: só a tela aberta toca som. O ícone mostra qual está tocando;
+    // clicar ativa o som desta tela (silenciando as outras) ou silencia a que está tocando.
+    if (!mine && !own && s.audio) {
+      const playing = s.no === watching && !muted && audioCtx?.state === 'running';
+      const speaker = document.createElement('button');
+      speaker.className = 'speaker' + (playing ? ' on' : '');
+      speaker.textContent = playing ? '🔊' : '🔇';
+      speaker.title = playing ? `Silenciar ${s.name}` : `Ouvir ${s.name} (as outras telas ficam sem som)`;
+      speaker.onclick = (e) => {
+        e.stopPropagation();
+        if (playing) {
+          setMuted(true);
+        } else {
+          watch(s.no);
+          enableAudio();
+        }
+      };
+      meta.append(speaker);
+    }
 
     if (isHost && s.owner !== '') {
       const kick = document.createElement('button');
@@ -582,10 +604,40 @@ function enableAudio() {
   if (!audioCtx) {
     audioCtx = new AudioContext({ latencyHint: 'interactive' });
     gainNode = audioCtx.createGain();
-    gainNode.connect(audioCtx.destination);
+    // Limitador depois do volume: dá para passar de 100% (jogos costumam chegar baixos) sem distorcer.
+    const limiter = audioCtx.createDynamicsCompressor();
+    limiter.threshold.value = -3;
+    limiter.knee.value = 0;
+    limiter.ratio.value = 20;
+    limiter.attack.value = 0.003;
+    limiter.release.value = 0.1;
+    gainNode.connect(limiter);
+    limiter.connect(audioCtx.destination);
   }
-  audioCtx.resume();
+  audioCtx.resume().then(renderTiles);
   setMuted(false);
+}
+
+// ---------- Volume por pessoa ----------
+// Cada pessoa transmite num volume diferente, então o volume escolhido é lembrado por nome.
+
+let savedVolumes = {};
+try { savedVolumes = JSON.parse(localStorage.getItem('gamestream-volumes') || '{}'); } catch { /* sem armazenamento */ }
+
+function watchedName() {
+  return watching !== null ? streams.get(watching)?.name || '' : '';
+}
+
+function loadVolumeForWatched() {
+  const v = savedVolumes[watchedName()];
+  $('volume').value = typeof v === 'number' ? v : 1;
+  applyVolume();
+}
+
+function applyVolume() {
+  const v = Number($('volume').value);
+  $('volumeLabel').textContent = Math.round(v * 100) + '%';
+  if (gainNode) gainNode.gain.value = muted ? 0 : v;
 }
 
 // O aviso "clique para ativar o som" só aparece quando a tela aberta tem áudio para tocar.
@@ -595,9 +647,11 @@ function updateUnmuteHint() {
 
 function setMuted(value) {
   muted = value;
-  if (gainNode) gainNode.gain.value = muted ? 0 : Number($('volume').value);
+  applyVolume();
   updateUnmuteHint();
-  $('muteBtn').textContent = muted ? '🔇 Som desligado' : '🔊 Som ligado';
+  const name = watchedName();
+  $('muteBtn').textContent = muted ? '🔇 Som desligado' : name ? `🔊 Som de ${name}` : '🔊 Som ligado';
+  renderTiles();   // atualiza os alto-falantes das miniaturas
 }
 
 // O navegador só libera áudio depois de uma interação: qualquer clique na página já ativa o som.
@@ -607,8 +661,14 @@ document.addEventListener('pointerdown', (e) => {
 $('unmute').onclick = enableAudio;
 $('muteBtn').onclick = () => (muted || !audioCtx ? enableAudio() : setMuted(true));
 $('volume').oninput = () => {
+  const name = watchedName();
+  if (name) {
+    savedVolumes[name] = Number($('volume').value);
+    try { localStorage.setItem('gamestream-volumes', JSON.stringify(savedVolumes)); } catch { /* sem armazenamento */ }
+  }
   if (!audioCtx) enableAudio();
-  else setMuted(false);
+  else if (muted) setMuted(false);
+  else applyVolume();
 };
 
 function toggleFullscreen() {

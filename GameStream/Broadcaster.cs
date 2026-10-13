@@ -66,6 +66,9 @@ public sealed class Broadcaster : IDisposable
         return peak <= 0.00001f ? -100 : Math.Round(20 * Math.Log10(peak), 1);
     }
 
+    /// <summary>Ganho que o modo automático está aplicando agora (dB), ou null se o ganho é manual ou não há áudio.</summary>
+    public double? AutoGainDb => _audio is { AutoGain: true } a ? Math.Round(a.CurrentAutoGainDb) : null;
+
     /// <summary>Baixa o FFmpeg já na abertura do app (só na primeira vez), para o "Iniciar" ser rápido.</summary>
     public async Task PrepareAsync()
     {
@@ -128,7 +131,7 @@ public sealed class Broadcaster : IDisposable
             {
                 try
                 {
-                    var audio = new AudioCapture { GainDb = s.AudioGainDb };
+                    var audio = new AudioCapture { GainDb = s.AudioGainDb, AutoGain = s.AudioAutoGain };
                     audio.Packet += OnAudioPacket;
                     if (audioMode == "window")
                     {
