@@ -190,11 +190,17 @@ function updateStreams(list) {
   }
 
   // Só uma tela na sala (o caso mais comum): já abre direto nela.
+  // A própria transmissão não abre sozinha: fica só como miniatura, para o PC de quem
+  // transmite não gastar placa de vídeo e memória decodificando a própria tela.
   if (watching === null && autoWatch) {
-    const others = [...streams.values()].filter((s) => !isMine(s));
+    const others = [...streams.values()].filter((s) => !isMine(s) && !isOwnBroadcast(s));
     if (others.length === 1) watch(others[0].no, false);
   }
 }
+
+// A transmissão do app, vista de dentro do próprio app (quem criou a sala). Diferente de "isMine",
+// dá para abrir a prévia ao vivo com um clique, se a pessoa quiser conferir.
+const isOwnBroadcast = (s) => EMBEDDED && s.no === HOST_STREAM;
 
 // Minha tela: enviada por esta página ou pelo app deste mesmo PC.
 const isMine = (s) => s.owner !== '' && (s.owner === myId || (MY_DEVICE !== '' && s.dev === MY_DEVICE));
@@ -358,7 +364,10 @@ function renderTiles() {
     tile.className = 'tile' + (s.no === watching ? ' selected' : '') + (mine ? ' mine' : '');
     tile.dataset.no = s.no;
     tile.tabIndex = mine ? -1 : 0;
-    tile.title = mine ? 'Esta é a sua tela' : `Assistir à tela de ${s.name}`;
+    const own = isOwnBroadcast(s);
+    tile.title = mine ? 'Esta é a sua tela'
+      : own ? 'Sua transmissão. A prévia fica pausada para poupar o PC; clique para ver ao vivo.'
+      : `Assistir à tela de ${s.name}`;
 
     const thumb = document.createElement('div');
     thumb.className = 'thumb';
@@ -375,7 +384,7 @@ function renderTiles() {
     live.textContent = 'AO VIVO';
     const hint = document.createElement('span');
     hint.className = 'expand-hint';
-    hint.textContent = '⤢ Assistir';
+    hint.textContent = own ? '⤢ Ver prévia ao vivo' : '⤢ Assistir';
     thumb.append(live, hint);
 
     const meta = document.createElement('div');
@@ -383,7 +392,7 @@ function renderTiles() {
     const name = document.createElement('b');
     name.textContent = s.name;
     const tag = document.createElement('small');
-    tag.textContent = mine ? 'você' : s.audio ? '🔊' : '';
+    tag.textContent = mine ? 'você' : own ? (s.no === watching ? 'você' : 'você · prévia pausada') : s.audio ? '🔊' : '';
     meta.append(name, tag);
 
     if (isHost && s.owner !== '') {

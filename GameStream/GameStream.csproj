@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -10,7 +10,7 @@
     <RootNamespace>GameStream</RootNamespace>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>0.2.0</Version>
+    <Version>0.2.1</Version>
     <Product>GameStream</Product>
   </PropertyGroup>
 
@@ -22,7 +22,7 @@
     <!-- Kestrel (servidor HTTP + WebSocket) dentro do app desktop -->
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
-    <!-- Áudio do sistema (WASAPI loopback) e codificação Opus, ambos em C# puro -->
+    <!-- Ãudio do sistema (WASAPI loopback) e codificaÃ§Ã£o Opus, ambos em C# puro -->
     <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
     <PackageReference Include="Concentus" Version="2.2.2" />
   </ItemGroup>
