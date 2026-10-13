@@ -58,8 +58,34 @@ public partial class MainWindow : Window
             _server.Broadcaster = _broadcaster;
             _ = _broadcaster.PrepareAsync();
 
+            // A sala (vídeo e som das telas dos outros) roda dentro do WebView2. Enquanto a pessoa joga, a janela
+            // do app fica atrás do jogo ou minimizada, e por padrão o Chromium trata isso como "aba em segundo
+            // plano": reduz a prioridade da página e o som fica picotado. Estas opções desligam essa economia.
+            var browserArgs = new List<string> { "--autoplay-policy=no-user-gesture-required" };
+            // GAMESTREAM_NO_BG_FIX=1 mantém a economia ligada (só para comparar o antes e o depois em testes).
+            if (Environment.GetEnvironmentVariable("GAMESTREAM_NO_BG_FIX") != "1")
+            {
+                browserArgs.AddRange([
+                    "--disable-background-timer-throttling",
+                    "--disable-renderer-backgrounding",
+                    "--disable-backgrounding-occluded-windows",
+                    "--disable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling",
+                ]);
+            }
+#if DEBUG
+            // Só em desenvolvimento: porta de depuração para inspecionar a página por script.
+            if (int.TryParse(Environment.GetEnvironmentVariable("GAMESTREAM_DEBUG_PORT"), out var debugPort))
+                browserArgs.AddRange([$"--remote-debugging-port={debugPort}", "--remote-allow-origins=*"]);
+#endif
+            var options = new CoreWebView2EnvironmentOptions(string.Join(' ', browserArgs));
+#if DEBUG
+            // Pasta própria nas compilações de desenvolvimento (uma por porta de depuração), para rodarem
+            // ao lado do app instalado e entre si com opções diferentes.
+            var dataDir = Path.Combine(Tools.DataDir, "WebView2-dev" + Environment.GetEnvironmentVariable("GAMESTREAM_DEBUG_PORT"));
+#else
             var dataDir = Path.Combine(Tools.DataDir, "WebView2");
-            var env = await CoreWebView2Environment.CreateAsync(null, dataDir);
+#endif
+            var env = await CoreWebView2Environment.CreateAsync(null, dataDir, options);
             await Web.EnsureCoreWebView2Async(env);
 
             var core = Web.CoreWebView2;

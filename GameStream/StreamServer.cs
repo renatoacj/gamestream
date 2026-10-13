@@ -67,8 +67,11 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
     /// <summary>Limite de pessoas na sala; 0 = sem limite.</summary>
     public int MaxViewers { get; set; }
 
-    /// <summary>Se quem entra pelo link também pode compartilhar a própria tela.</summary>
-    public bool AllowGuestShare { get; private set; } = true;
+    /// <summary>
+    /// Se quem entra também pode compartilhar a própria tela. Desligado = "transmissão" (só o app transmite);
+    /// ligado = "sala" (todos podem compartilhar). O app abre em transmissão.
+    /// </summary>
+    public bool AllowGuestShare { get; private set; }
 
     public int Port => _port;
 
@@ -258,6 +261,7 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
                     message = Joined.Message,
                     roomUrl = Joined.RoomPageUrl,
                     origin = Joined.Origin,
+                    hostName = Joined.HostName,
                 },
             });
         });
@@ -354,6 +358,7 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
         app.MapPost("/api/allow-share", (HttpContext ctx) =>
         {
             if (!IsHost(ctx)) return Results.Unauthorized();
+            RoomName = CleanRoomName(ctx.Request.Query["name"]);
             SetAllowGuestShare(ctx.Request.Query["on"] == "1");
             return Results.Ok();
         });
@@ -519,6 +524,7 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
             ["people"] = people,
             ["streams"] = streams,
             ["canShare"] = AllowGuestShare,
+            ["title"] = AllowGuestShare ? RoomName : "",
         }.ToJsonString();
         foreach (var p in _people.Values) p.EnqueueText(msg);
     }
@@ -728,6 +734,15 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
                 if (data.Length <= MaxThumbBytes && me.AllowThumbnail()) SetThumbnail(stream, data);
                 break;
         }
+    }
+
+    /// <summary>Nome da sala aberta (aparece no topo da sala para todos); vazio na transmissão.</summary>
+    public string RoomName { get; private set; } = "";
+
+    private static string CleanRoomName(string? name)
+    {
+        var clean = new string((name ?? "").Where(ch => !char.IsControl(ch)).ToArray()).Trim();
+        return clean.Length > 32 ? clean[..32].Trim() : clean;
     }
 
     private static string CleanName(string? name, bool isHost)

@@ -28,8 +28,7 @@ const PREFS_VERSION = 3;
 
 let shownUrl;
 let roomSrc = null;     // endereço carregado no quadro da sala
-let mode = 'host';      // 'host' = criar sala | 'join' = entrar na sala de alguém
-let joined = null;      // dados da sala em que entramos (vem do status)
+let joined = null;      // dados da sala de um amigo em que entramos (vem do status)
 let sources = [];
 
 // ---------- Configurações ----------
@@ -83,9 +82,8 @@ function loadPrefs() {
 // Resumo ao lado de "Configurações avançadas", para ver o essencial sem abrir.
 function updateAdvancedSummary() {
   const s = readSettings();
-  const encoder = $('encoder').selectedOptions[0]?.textContent.split(' —')[0] || '';
   $('advancedSummary').textContent =
-    `${s.height ? s.height + 'p' : 'resolução original'} · ${s.fps} fps · ${(s.bitrateKbps / 1000).toLocaleString('pt-BR')} Mbps · ${encoder}`;
+    `${s.height ? s.height + 'p' : 'resolução original'} · ${s.fps} fps · ${(s.bitrateKbps / 1000).toLocaleString('pt-BR')} Mbps`;
 }
 
 $('profilePreset').onchange = () => {
@@ -280,7 +278,6 @@ async function refresh() {
   $('viewerCount').textContent = s.maxViewers ? `${s.viewers} / ${s.maxViewers}` : s.viewers;
   $('guestStreams').textContent = s.guestStreams;
   if (document.activeElement !== $('maxViewers')) $('maxViewers').value = String(s.maxViewers);
-  $('allowShare').checked = s.allowShare;
   $('sourceOut').textContent = live ? s.source : '—';
   $('sourceOut').title = s.source || '';
   $('sizeOut').textContent = live ? s.outputSize : '—';
@@ -291,15 +288,17 @@ async function refresh() {
 
   // A sala: a sua (você como anfitrião) ou a do amigo em que você entrou.
   joined = s.joined;
-  if (joined && mode !== 'join') setMode('join', false);
+  lastStatus = s;
+  if (joined?.hostName && joinedWith) rememberRoom(joinedWith, joined.hostName);   // dá nome à sala na lista de recentes
   const wanted = joined ? joined.roomUrl : s.roomUrl + (myName() ? `&name=${encodeURIComponent(myName())}` : '');
   if (wanted !== roomSrc) {
     roomSrc = wanted;
     $('room').src = wanted;
   }
-  renderJoinState();
-  if (!busy) $('startBtn').textContent = joined ? '▶ Compartilhar minha tela na sala' : '▶ Iniciar transmissão';
-  $('stopBtn').textContent = joined ? '■ Parar de compartilhar' : '■ Parar';
+  const inRoom = !!joined || s.allowShare;
+  if (!busy) $('startBtn').textContent = inRoom ? '▶ Compartilhar minha tela na sala' : '▶ Iniciar transmissão';
+  $('stopBtn').textContent = inRoom ? '■ Parar de compartilhar' : '■ Parar';
+  renderView();
   if (!rotating) $('rotateBtn').disabled = !s.publicUrl;
 
   if (s.publicUrl !== shownUrl || !s.publicUrl) {
@@ -335,7 +334,16 @@ function renderLink(s) {
   box.append(row);
 }
 
-// ---------- Nome e modo (criar sala / entrar em uma sala) ----------
+// ---------- Navegação: Transmissão e Salas ----------
+//
+// "Transmissão" (tela inicial): só você transmite; quem tem o código ou o link assiste.
+// "Salas": criar uma sala (todos podem compartilhar) ou entrar na de um amigo.
+// No servidor, a diferença entre as duas é só se os convidados podem compartilhar a tela.
+
+let view = 'broadcast';   // 'broadcast' | 'rooms'
+let showList = false;     // na área de salas, ver a lista mesmo estando numa sala (ela continua aberta)
+let lastStatus = null;
+let joinedWith = '';      // código/link usado para entrar na sala atual (para a lista de recentes)
 
 function myName() {
   return $('myName').value.trim().slice(0, 24);
@@ -345,44 +353,194 @@ $('myName').onchange = () => {
   try { localStorage.setItem('gamestream-name', myName()); } catch { /* sem armazenamento */ }
 };
 
-function setMode(next, save = true) {
-  mode = next;
-  $('modeHost').classList.toggle('active', mode === 'host');
-  $('modeJoin').classList.toggle('active', mode === 'join');
-  $('joinRow').hidden = mode !== 'join';
-  $('hostSection').hidden = mode === 'join';
-  $('roomStats').hidden = mode === 'join';   // esses números são da sua sala, não da do amigo
-  $('guestSection').hidden = mode !== 'join';
-  if (save) { try { localStorage.setItem('gamestream-mode', mode); } catch { /* sem armazenamento */ } }
-  renderJoinState();
-}
+/** Estou numa sala que eu mesmo criei? */
+const inOwnRoom = () => !!lastStatus?.allowShare && !joined;
 
-function renderJoinState() {
-  const inRoom = !!joined;
-  $('joinBtn').hidden = inRoom;
-  $('leaveBtn').hidden = !inRoom;
-  $('joinUrl').disabled = inRoom;
-  $('myName').disabled = inRoom;   // o nome vai junto ao entrar; para mudar, saia e entre de novo
+function renderView() {
+  const own = inOwnRoom();
+  if ((joined || own) && view !== 'rooms') view = 'rooms';   // quem está numa sala está na área de salas
+  const lobby = view === 'rooms' && (showList || (!joined && !own));
+
+  $('navBroadcast').classList.toggle('active', view === 'broadcast');
+  $('navRooms').classList.toggle('active', view === 'rooms');
+  $('lobby').hidden = !lobby;
+  $('workspace').hidden = lobby;
+  document.body.classList.toggle('no-side', lobby);
+  $('liveBadge').hidden = lobby;
+
+  $('pageTitle').textContent = view === 'broadcast' ? 'Transmissão'
+    : lobby ? 'Salas'
+    : joined ? `Sala de ${joined.hostName || 'um amigo'}`
+    : (activeRoom()?.name || 'Minha sala');
+  $('backToRoomsBtn').hidden = lobby || !(joined || own);
+  $('roomActionBtn').hidden = lobby || !(joined || own);
+  $('roomActionBtn').textContent = joined ? 'Sair da sala' : 'Encerrar sala';
+
+  // Painel lateral: código e link (transmissão ou sala própria) ou o aviso de convidado.
+  $('hostSection').hidden = !!joined || lobby;
+  $('guestSection').hidden = !joined;
+  $('roomStats').hidden = !!joined || lobby;
+  $('codeTitle').textContent = own ? '🔑 Código da sala' : '🔑 Código para assistir';
+  $('viewerLabel').textContent = own ? 'Pessoas na sala' : 'Pessoas assistindo';
+  $('guestStreamsRow').hidden = !own;
+  $('modeHint').textContent = own
+    ? 'Quem entra com o código ou o link assiste e também pode compartilhar a própria tela. Ninguém controla seu PC por ele.'
+    : 'Quem tem o código ou o link só assiste à sua transmissão. Para todos poderem compartilhar, crie uma sala em Salas.';
+  $('myName').disabled = !!joined;   // o nome vai junto ao entrar; para mudar, saia e entre de novo
+
   const box = $('joinMessage');
-  if (mode !== 'join') { box.hidden = true; return; }
-  if (inRoom) {
+  if (joined) {
     const connected = joined.state === 'connected';
-    box.hidden = false;
-    box.className = connected && !joined.message ? 'ok' : 'error';
-    box.textContent = joined.message || (connected ? '✔ Conectado à sala.' : 'Conectando à sala…');
-  } else if (!joinError) {
+    box.hidden = connected && !joined.message;
+    box.className = 'error';
+    box.textContent = joined.message || 'Conectando à sala…';
+  } else {
     box.hidden = true;
+  }
+  if (lobby) {
+    renderMyRooms();
+    renderRecent();
   }
 }
 
-let joinError = '';
+$('navRooms').onclick = () => { view = 'rooms'; showList = false; renderView(); };
+$('backToRoomsBtn').onclick = () => { showList = true; renderView(); };
+$('navBroadcast').onclick = async () => {
+  if (joined) {
+    if (!confirm('Sair da sala e voltar para a sua transmissão?')) return;
+    await leaveRoom();
+  } else if (inOwnRoom() && !(await endOwnRoom())) {
+    return;
+  }
+  view = 'broadcast';
+  renderView();
+};
 
-async function joinRoom() {
-  const url = $('joinUrl').value.trim();
+// ---------- Minhas salas ----------
+// Uma sala salva é um nome que você reabre quando quiser. O código muda a cada abertura
+// (o endereço da sala é sorteado de novo), então os amigos recebem o código do dia.
+
+function myRooms() {
+  try { return JSON.parse(localStorage.getItem('gamestream-my-rooms') || '[]'); } catch { return []; }
+}
+
+function storeMyRooms(list) {
+  try { localStorage.setItem('gamestream-my-rooms', JSON.stringify(list.slice(0, 20))); } catch { /* sem armazenamento */ }
+}
+
+let activeRoomId = null;   // sala salva que está aberta agora (enquanto o servidor estiver em modo sala)
+
+/** A sala salva que está aberta agora, se houver. */
+function activeRoom() {
+  return inOwnRoom() ? myRooms().find((r) => r.id === activeRoomId) || null : null;
+}
+
+async function openRoom(room) {
+  // Abrir uma sala gera um código novo: quem estava assistindo ou em outra sala precisa dele para entrar.
+  const others = lastStatus?.viewers > 0;
+  if (others && !confirm(`Abrir "${room.name}" gera um código novo: quem está conectado agora será desconectado. Continuar?`)) return;
+  await fetch(api('rotate-key'), { method: 'POST' });
+  await fetch(`${api('allow-share')}&on=1&name=${encodeURIComponent(room.name)}`, { method: 'POST' });
+  activeRoomId = room.id;
+  try { sessionStorage.setItem('gamestream-active-room', room.id); } catch { /* sem armazenamento */ }
+  storeMyRooms(myRooms().map((r) => (r.id === room.id ? { ...r, at: Date.now() } : r)));
+  showList = false;
+  await refresh();
+}
+
+async function createRoom() {
+  const name = $('newRoomName').value.trim().slice(0, 32) || `Sala ${myRooms().length + 1}`;
+  const room = { id: Math.random().toString(36).slice(2, 10), name, at: Date.now() };
+  storeMyRooms([room, ...myRooms()]);
+  $('newRoomName').value = '';
+  $('createRoomBtn').disabled = true;
+  try { await openRoom(room); } finally { $('createRoomBtn').disabled = false; }
+  renderView();
+}
+
+/** Fecha a sala aberta (ela continua salva em "Minhas salas"). */
+async function endOwnRoom() {
+  const name = activeRoom()?.name || 'a sala';
+  if (!confirm(`Encerrar "${name}"? Todos são desconectados e o código deixa de valer. A sala continua salva para você abrir de novo depois.`)) return false;
+  await fetch(`${api('allow-share')}&on=0`, { method: 'POST' });
+  await fetch(api('rotate-key'), { method: 'POST' });
+  activeRoomId = null;
+  try { sessionStorage.removeItem('gamestream-active-room'); } catch { /* sem armazenamento */ }
+  showList = false;
+  await refresh();
+  return true;
+}
+
+function renderMyRooms() {
+  const box = $('myRooms');
+  box.textContent = '';
+  const open = activeRoom();
+  for (const r of myRooms()) {
+    const row = document.createElement('div');
+    row.className = 'recent';
+    const info = document.createElement('div');
+    info.className = 'info';
+    const name = document.createElement('b');
+    name.textContent = r.name;
+    const when = document.createElement('small');
+    if (open?.id === r.id) {
+      when.className = 'open-tag';
+      when.textContent = '● Aberta agora';
+    } else {
+      when.textContent = 'Aberta pela última vez em ' + new Date(r.at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+    }
+    info.append(name, when);
+
+    const go = document.createElement('button');
+    if (open?.id === r.id) {
+      go.textContent = 'Voltar para a sala';
+      go.className = 'primary';
+      go.onclick = () => { showList = false; renderView(); };
+    } else {
+      go.textContent = 'Abrir';
+      go.onclick = async () => {
+        if (joined) {
+          if (!confirm('Sair da sala do seu amigo para abrir a sua?')) return;
+          await leaveRoom();
+        }
+        await openRoom(r);
+      };
+    }
+    const remove = document.createElement('button');
+    remove.className = 'small-btn';
+    remove.textContent = '✕';
+    remove.title = 'Apagar esta sala da lista';
+    remove.disabled = open?.id === r.id;   // encerre a sala antes de apagá-la
+    remove.onclick = () => {
+      if (!confirm(`Apagar "${r.name}" da lista?`)) return;
+      storeMyRooms(myRooms().filter((x) => x.id !== r.id));
+      renderMyRooms();
+    };
+    row.append(info, go, remove);
+    box.append(row);
+  }
+}
+
+$('createRoomBtn').onclick = createRoom;
+$('newRoomName').onkeydown = (e) => { if (e.key === 'Enter') createRoom(); };
+$('roomActionBtn').onclick = async () => {
+  if (joined) await leaveRoom();
+  else await endOwnRoom();
+};
+
+// ---------- Entrar na sala de um amigo ----------
+
+function showJoinError(text) {
+  $('joinError').textContent = text || '';
+  $('joinError').hidden = !text;
+}
+
+async function joinRoom(code) {
+  const url = (code ?? $('joinUrl').value).trim();
   if (!url) return;
   if (!myName()) {
     $('myName').focus();
-    showJoinError('Escreva o seu nome antes de entrar.');
+    showJoinError('Escreva o seu nome (no menu à esquerda) antes de entrar.');
     return;
   }
   $('joinBtn').disabled = true;
@@ -396,36 +554,72 @@ async function joinRoom() {
       showJoinError((await res.json().catch(() => ({}))).error || 'Não foi possível entrar na sala.');
       return;
     }
-    joinError = '';
-    try { localStorage.setItem('gamestream-last-room', url); } catch { /* sem armazenamento */ }
+    showJoinError('');
+    showList = false;
+    joinedWith = url;
+    rememberRoom(url, '');
+    $('joinUrl').value = '';
     await refresh();
   } finally {
     $('joinBtn').disabled = false;
   }
 }
 
-function showJoinError(text) {
-  joinError = text;
-  $('joinMessage').hidden = false;
-  $('joinMessage').className = 'error';
-  $('joinMessage').textContent = text;
-}
-
 async function leaveRoom() {
   await fetch(api('leave'), { method: 'POST' });
   joined = null;
+  joinedWith = '';
   await refresh();
 }
 
-$('joinBtn').onclick = joinRoom;
+$('joinBtn').onclick = () => joinRoom();
 $('joinUrl').onkeydown = (e) => { if (e.key === 'Enter') joinRoom(); };
-$('leaveBtn').onclick = leaveRoom;
-$('modeJoin').onclick = () => setMode('join');
-$('modeHost').onclick = async () => {
-  if (joined && !confirm('Sair da sala do seu amigo e voltar para a sua?')) return;
-  if (joined) await leaveRoom();
-  setMode('host');
-};
+
+// ---------- Salas recentes ----------
+// Só ajudam enquanto a sala continuar aberta: o código muda quando quem a criou fecha o app.
+
+function recentRooms() {
+  try { return JSON.parse(localStorage.getItem('gamestream-rooms') || '[]'); } catch { return []; }
+}
+
+function storeRooms(list) {
+  try { localStorage.setItem('gamestream-rooms', JSON.stringify(list.slice(0, 8))); } catch { /* sem armazenamento */ }
+}
+
+function rememberRoom(code, label) {
+  const old = recentRooms().find((r) => r.code === code);
+  storeRooms([{ code, label: label || old?.label || '', at: Date.now() }, ...recentRooms().filter((r) => r.code !== code)]);
+}
+
+function renderRecent() {
+  const list = recentRooms();
+  $('recentCard').hidden = !list.length;
+  const box = $('recentRooms');
+  box.textContent = '';
+  for (const r of list) {
+    const row = document.createElement('div');
+    row.className = 'recent';
+    const info = document.createElement('div');
+    info.className = 'info';
+    const name = document.createElement('b');
+    name.textContent = r.label ? `Sala de ${r.label}` : 'Sala';
+    const code = document.createElement('code');
+    code.textContent = r.code.length > 60 ? r.code.slice(0, 57) + '…' : r.code;
+    const when = document.createElement('small');
+    when.textContent = 'Usada em ' + new Date(r.at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+    info.append(name, code, when);
+    const enter = document.createElement('button');
+    enter.textContent = 'Entrar';
+    enter.onclick = () => joinRoom(r.code);
+    const remove = document.createElement('button');
+    remove.className = 'small-btn';
+    remove.textContent = '✕';
+    remove.title = 'Tirar da lista';
+    remove.onclick = () => { storeRooms(recentRooms().filter((x) => x.code !== r.code)); renderRecent(); };
+    row.append(info, enter, remove);
+    box.append(row);
+  }
+}
 
 // ---------- Código da sala ----------
 
@@ -461,7 +655,7 @@ try { setSideCollapsed(localStorage.getItem('gamestream-side-collapsed') === '1'
 
 let rotating = false;
 $('rotateBtn').onclick = async () => {
-  if (!confirm('Gerar um link e um código novos? Todos que estão na sala serão desconectados e precisarão do código ou link novo.')) return;
+  if (!confirm('Gerar um código e um link novos? Todos são desconectados e precisarão do código ou link novo.')) return;
   rotating = true;
   $('rotateBtn').disabled = true;
   await fetch(api('rotate-key'), { method: 'POST' });
@@ -471,10 +665,6 @@ $('rotateBtn').onclick = async () => {
 $('maxViewers').onchange = () => {
   try { localStorage.setItem('gamestream-max-viewers', $('maxViewers').value); } catch { /* sem armazenamento */ }
   fetch(`${api('max-viewers')}&n=${$('maxViewers').value}`, { method: 'POST' });
-};
-$('allowShare').onchange = () => {
-  try { localStorage.setItem('gamestream-allow-share', $('allowShare').checked ? '1' : '0'); } catch { /* sem armazenamento */ }
-  fetch(`${api('allow-share')}&on=${$('allowShare').checked ? 1 : 0}`, { method: 'POST' });
 };
 $('logBtn').onclick = () => fetch(api('open-log'), { method: 'POST' });
 
@@ -505,17 +695,14 @@ $('stopBtn').onclick = stop;
 const saved = loadPrefs();
 try {
   $('myName').value = localStorage.getItem('gamestream-name') || '';
-  $('joinUrl').value = localStorage.getItem('gamestream-last-room') || '';
-  setMode(localStorage.getItem('gamestream-mode') === 'join' ? 'join' : 'host', false);
+  activeRoomId = sessionStorage.getItem('gamestream-active-room');
 } catch { /* sem armazenamento */ }
 loadSources(saved);
 loadEncoders();
-// Limite e permissão de compartilhar ficam no servidor; reaplica o que foi escolhido da última vez.
+// O limite de pessoas fica no servidor; reaplica o que foi escolhido da última vez.
 try {
   const max = localStorage.getItem('gamestream-max-viewers');
   if (max !== null) fetch(`${api('max-viewers')}&n=${max}`, { method: 'POST' });
-  const share = localStorage.getItem('gamestream-allow-share');
-  if (share !== null) fetch(`${api('allow-share')}&on=${share}`, { method: 'POST' });
 } catch { /* sem armazenamento */ }
 refresh();
 setInterval(refresh, 1000);

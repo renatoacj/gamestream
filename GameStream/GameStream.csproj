@@ -10,7 +10,7 @@
     <RootNamespace>GameStream</RootNamespace>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>0.2.3</Version>
+    <Version>0.3.0</Version>
     <Product>GameStream</Product>
   </PropertyGroup>
 

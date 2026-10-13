@@ -6,7 +6,38 @@
 <link rel="icon" href="favicon.png">
 <link rel="stylesheet" href="style.css">
 <style>
-  body { display: grid; grid-template-columns: 1fr 320px; height: 100vh; }
+  /* Linha sob a barra de título (que tem a mesma cor do app), para separar as duas. */
+  body { display: grid; grid-template-columns: 190px 1fr 320px; height: 100vh; border-top: 1px solid var(--border); }
+
+  /* Menu lateral esquerdo */
+  nav { background: var(--panel); border-right: 1px solid var(--border); padding: 14px 10px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  nav .brand { font-size: 16px; font-weight: 700; padding: 4px 8px 12px; white-space: nowrap; }
+  .nav-btn { display: flex; align-items: center; gap: 10px; text-align: left; background: transparent; border-color: transparent; padding: 9px 10px; font-size: 14px; }
+  .nav-btn:hover { background: var(--panel-2); border-color: transparent; }
+  .nav-btn.active { background: var(--accent); color: #fff; font-weight: 600; }
+  .nav-btn .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--live); margin-left: auto; animation: pulse 1.4s infinite; }
+  nav .grow { flex: 1; }
+  nav .name-field { flex-direction: column; align-items: stretch; gap: 4px; padding: 0 4px; font-size: 12px; }
+  nav .name-field input { width: 100%; }
+
+  /* Área de trabalho (tela + controles): ocupa o resto da coluna; a tela encolhe quando as configurações abrem. */
+  #workspace { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+  #workspace > * { flex: none; }
+  #workspace > .preview { flex: 1 1 0; }
+  header h1 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* Saguão das salas */
+  .lobby { display: grid; gap: 14px; align-content: start; max-width: 760px; }
+  .lobby-card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  .lobby-card h2 { margin: 0 0 4px; font-size: 15px; }
+  .lobby-card p { margin: 0 0 12px; color: var(--muted); font-size: 13px; }
+  .recent { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--border); }
+  .recent:first-of-type { border-top: 0; }
+  .recent .info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .recent b, .recent code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .recent code { font-size: 12px; color: var(--muted); }
+  .recent small { color: var(--muted); font-size: 11.5px; }
+  .recent .open-tag { color: var(--ok); font-weight: 600; }
   main { display: flex; flex-direction: column; padding: 16px; gap: 10px; min-width: 0; overflow-y: auto; }
   main > * { flex: none; }
   header { display: flex; align-items: center; gap: 12px; }
@@ -56,8 +87,19 @@
   }
 
   /* Janela estreita: o painel lateral vai para baixo e a página inteira rola. */
+  /* Janela média: o menu vira uma faixa estreita só com os ícones. */
+  @media (max-width: 1180px) {
+    body { grid-template-columns: 58px 1fr 320px; }
+    body.side-collapsed, body.no-side { grid-template-columns: 58px 1fr; }
+    nav { padding: 12px 8px; align-items: stretch; }
+    nav .brand span, .nav-btn span.label, nav .name-field { display: none; }
+    .nav-btn { justify-content: center; padding: 10px 0; }
+    .nav-btn .dot { position: absolute; margin: -18px 0 0 22px; }
+  }
+
   @media (max-width: 940px) {
     body { display: block; height: auto; }
+    nav { flex-direction: row; border-right: 0; border-bottom: 1px solid var(--border); }
     main { overflow: visible; }
     .preview { flex: none; height: 52vh; min-height: 240px; }
     aside { border-left: 0; border-top: 1px solid var(--border); overflow: visible; }
@@ -66,7 +108,11 @@
 
   /* Configurações avançadas: um botão ao lado da predefinição abre e fecha o painel */
   #advancedBtn.active { border-color: var(--accent); background: var(--panel); }
-  #advancedSummary { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  /* Predefinição, botão, resumo e "Ver log" numa linha só: o resumo ocupa o que sobrar e corta com "…" se faltar espaço. */
+  .preset-row { flex-wrap: nowrap; }
+  .preset-row > * { flex: none; }
+  .preset-row select { flex: 0 1 205px; min-width: 120px; }
+  #advancedSummary { flex: 1 1 0; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   fieldset {
     border: 1px solid var(--border); border-radius: 10px; background: var(--panel);
     padding: 10px 12px 12px; margin: 0; min-width: 0;
@@ -88,8 +134,11 @@
   /* O botão fica no canto esquerdo do painel, na divisa com a área principal; o primeiro título abre espaço para ele. */
   #sideHide { position: absolute; top: 12px; left: 10px; z-index: 1; }
   #hostSection > h2:first-child, #guestSection > h2:first-child { padding-left: 38px; line-height: 26px; }
-  body.side-collapsed { grid-template-columns: 1fr; }
+  body.side-collapsed { grid-template-columns: 190px 1fr; }
   body.side-collapsed aside { display: none; }
+  /* Na lista de salas não há código nem status para mostrar: o painel direito some. */
+  body.no-side { grid-template-columns: 190px 1fr; }
+  body.no-side aside, body.no-side #sideShow { display: none; }
   aside h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 18px 0 8px; }
   aside h2:first-child { margin-top: 0; }
   .link {
@@ -155,32 +204,55 @@
 </style>
 </head>
 <body>
+<nav>
+  <div class="brand">🎮 <span>GameStream</span></div>
+  <button id="navBroadcast" class="nav-btn active" title="Transmitir a sua tela para quem tiver o link (só você transmite)">📡 <span class="label">Transmissão</span></button>
+  <button id="navRooms" class="nav-btn" title="Criar uma sala onde todos podem compartilhar a tela, ou entrar na sala de um amigo">👥 <span class="label">Salas</span></button>
+  <div class="grow"></div>
+  <label class="name-field">Seu nome
+    <input type="text" id="myName" maxlength="24" placeholder="Como aparecer" autocomplete="off">
+  </label>
+</nav>
+
 <main>
   <header>
-    <h1>🎮 GameStream</h1>
+    <button id="backToRoomsBtn" title="Voltar para a lista de salas sem sair desta" hidden>⬅ Salas</button>
+    <h1 id="pageTitle">Transmissão</h1>
+    <button id="roomActionBtn" hidden>Sair da sala</button>
     <span id="liveBadge" class="badge"><span class="dot"></span><span id="liveText">OFFLINE</span></span>
     <button id="sideShow" class="side-toggle" title="Mostrar o painel lateral (código, link e status)" hidden>⇤</button>
   </header>
-
-  <!-- Criar a própria sala ou entrar na de outra pessoa -->
-  <div class="row">
-    <div class="seg" role="tablist">
-      <button id="modeHost" class="seg-btn active" title="Você cria a sala e manda o link para os amigos">Criar sala</button>
-      <button id="modeJoin" class="seg-btn" title="Um amigo criou a sala e te mandou o link">Entrar em uma sala</button>
-    </div>
-    <span class="spacer"></span>
-    <label class="name-field">Seu nome
-      <input type="text" id="myName" maxlength="24" placeholder="Como aparecer na sala" autocomplete="off">
-    </label>
-  </div>
-  <div class="row" id="joinRow" hidden>
-    <input type="text" id="joinUrl" class="grow" placeholder="Cole o código da sala ou o link" autocomplete="off" spellcheck="false">
-    <button id="joinBtn" class="primary">Entrar</button>
-    <button id="leaveBtn" hidden>Sair da sala</button>
-  </div>
   <div id="joinMessage" class="muted" hidden></div>
 
-  <!-- A sala: sua transmissão e as telas compartilhadas pelos outros -->
+  <!-- Salas: criar a sua, entrar na de um amigo, ou voltar a uma recente -->
+  <div id="lobby" class="lobby" hidden>
+    <div class="lobby-card">
+      <h2>Minhas salas</h2>
+      <p>Numa sala, você e seus amigos compartilham a tela ao mesmo tempo e cada um escolhe qual assistir. As salas ficam salvas aqui; cada vez que você abre uma, ela ganha um código novo para mandar aos amigos.</p>
+      <div id="myRooms"></div>
+      <div class="row" style="margin-top: 10px">
+        <input type="text" id="newRoomName" class="grow" maxlength="32" placeholder="Nome da nova sala (ex.: Sexta do Division)" autocomplete="off">
+        <button id="createRoomBtn" class="primary">＋ Criar nova sala</button>
+      </div>
+    </div>
+    <div class="lobby-card">
+      <h2>Entrar na sala de um amigo</h2>
+      <p>Cole o código (ou o link) que ele te mandou.</p>
+      <div class="row">
+        <input type="text" id="joinUrl" class="grow" placeholder="Cole o código da sala ou o link" autocomplete="off" spellcheck="false">
+        <button id="joinBtn" class="primary">Entrar</button>
+      </div>
+      <div id="joinError" class="hint" style="color: var(--live)" hidden></div>
+    </div>
+    <div class="lobby-card" id="recentCard" hidden>
+      <h2>Salas recentes</h2>
+      <p>O código de uma sala muda quando quem a criou fecha o app. Se uma sala não abrir, peça o código novo.</p>
+      <div id="recentRooms"></div>
+    </div>
+  </div>
+
+  <!-- Área de trabalho: a tela (sua prévia ou a sala) e os controles de captura -->
+  <div id="workspace">
   <div class="preview">
     <iframe id="room" title="Sala" allow="fullscreen"></iframe>
   </div>
@@ -196,7 +268,7 @@
   </div>
   <div id="message" class="muted" hidden></div>
 
-  <div class="row">
+  <div class="row preset-row">
     <span class="muted">Predefinição:</span>
     <select id="profilePreset">
       <option value="recommended">Recomendado — 720p 30 fps, codificador automático</option>
@@ -208,7 +280,6 @@
     </select>
     <button id="advancedBtn" title="Abrir ou fechar as configurações de vídeo, codificação e áudio" aria-expanded="false">⚙ Configurações avançadas</button>
     <span class="muted" id="advancedSummary"></span>
-    <span class="spacer"></span>
     <button id="logBtn" class="small-btn" title="Abre o arquivo com os detalhes técnicos (útil para relatar um problema)">📄 Ver log</button>
   </div>
 
@@ -322,42 +393,40 @@
     </fieldset>
   </div>
   </div>
+  </div>
 </main>
 
 <aside>
   <button id="sideHide" class="side-toggle" title="Recolher o painel lateral">⇥</button>
   <div id="guestSection" hidden>
     <h2>🚪 Você está na sala de um amigo</h2>
-    <div class="hint" style="margin-top:0">Escolha a janela do jogo e clique em <b>Compartilhar minha tela na sala</b>. A captura usa as configurações abaixo, como numa sala sua.</div>
+    <div class="hint" style="margin-top:0">Escolha a janela do jogo e clique em <b>Compartilhar minha tela na sala</b>. A captura usa as mesmas configurações da sua transmissão.</div>
   </div>
   <div id="hostSection">
-  <h2>🔑 Código da sala</h2>
+  <h2 id="codeTitle">🔑 Código para assistir</h2>
   <div class="pin-box">
     <span id="roomCode" class="pin-code muted">gerando…</span>
     <button id="codeCopy" class="small-btn" disabled>Copiar</button>
   </div>
-  <div class="hint">Para quem tem o GameStream: <b>Entrar em uma sala</b> e colar o código.</div>
+  <div class="hint">Para quem tem o GameStream: <b>Salas → Entrar na sala de um amigo</b> e colar o código.</div>
   <h2>🔗 Link (para abrir no navegador)</h2>
   <div id="links"><span class="muted">Carregando…</span></div>
   <div class="link-tools">
-    <button id="rotateBtn" title="Cria um endereço novo e desconecta todos que estão assistindo">🔄 Gerar novo link</button>
-    <label title="Máximo de pessoas na sala ao mesmo tempo">Limite
+    <button id="rotateBtn" title="Cria um código e um link novos e desconecta todos">🔄 Gerar novo código</button>
+    <label title="Máximo de pessoas ao mesmo tempo">Limite
       <select id="maxViewers">
         <option value="0" selected>Sem limite</option>
         <option>3</option><option>5</option><option>10</option><option>20</option><option>50</option><option>100</option>
       </select>
     </label>
   </div>
-  <label class="check" title="Quem entra pelo link pode compartilhar a própria tela na sala, direto do navegador.">
-    <input type="checkbox" id="allowShare" checked> Convidados podem compartilhar a tela
-  </label>
-  <div class="hint">Só quem tem o link entra na sala, e ninguém controla seu PC por ele. Se o link vazar, gere um novo. Quem tiver o GameStream pode colar o link em <b>Entrar em uma sala</b> para compartilhar com mais qualidade.</div>
+  <div class="hint" id="modeHint"></div>
   </div>
 
   <h2>Status</h2>
   <div id="roomStats">
-    <div class="stat"><span>Pessoas na sala</span><b id="viewerCount">0</b></div>
-    <div class="stat"><span>Telas de convidados</span><b id="guestStreams">0</b></div>
+    <div class="stat"><span id="viewerLabel">Pessoas assistindo</span><b id="viewerCount">0</b></div>
+    <div class="stat" id="guestStreamsRow"><span>Telas de convidados</span><b id="guestStreams">0</b></div>
   </div>
   <div class="stat"><span>Transmitindo</span><b id="sourceOut">—</b></div>
   <div class="stat"><span>Resolução</span><b id="sizeOut">—</b></div>
@@ -365,7 +434,6 @@
   <div class="stat"><span>Bitrate do vídeo</span><b id="kbpsOut">—</b></div>
   <div class="stat"><span>Codificador</span><b id="encoderOut">—</b></div>
   <div class="stat"><span>Áudio</span><b id="audioOut">—</b></div>
-
 </aside>
 
 <dialog id="picker">

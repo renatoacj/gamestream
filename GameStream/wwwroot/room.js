@@ -21,7 +21,7 @@ const HEADER = 12;            // [tipo][flags][transmissão u16][timestamp f64]
 const KIND_VIDEO = 1, KIND_AUDIO = 2, KIND_THUMB = 3;
 const HOST_STREAM = 0;        // a transmissão feita pelo app
 const AUDIO_MIN_LEAD = 0.08;  // s de folga no áudio para absorver variação da rede
-const AUDIO_MAX_LEAD = 0.35;  // acima disso descarta para não acumular atraso
+const AUDIO_MAX_LEAD = 0.45;  // acima disso descarta para não acumular atraso
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('screen');
@@ -31,6 +31,7 @@ let ws = null;
 let myId = null;
 let isHost = false;
 let canShare = true;
+let roomName = '';
 let closedReason = null;
 
 let people = [];
@@ -130,6 +131,7 @@ function onControl(msg) {
     case 'room':
       people = msg.people;
       canShare = msg.canShare;
+      roomName = (msg.title || '').slice(0, 32);
       updateStreams(msg.streams);
       render();
       break;
@@ -297,6 +299,9 @@ function toast(text) {
 }
 
 function render() {
+  // "Transmissão" (só quem criou transmite) ou "Sala" (todos podem compartilhar)
+  $('roomTitle').textContent = canShare ? `🎮 ${roomName || 'Sala'}` : '📡 Transmissão';
+
   // Quem está na sala
   const box = $('people');
   box.textContent = '';
@@ -345,11 +350,17 @@ function renderTiles() {
   box.textContent = '';
 
   if (roomMessage || !streams.size) {
-    const m = roomMessage || {
+    const m = roomMessage || (canShare ? {
       title: 'Ninguém está compartilhando a tela ainda',
-      text: canShare && !EMBEDDED ? 'Quando alguém começar, a tela aparece aqui. Você também pode compartilhar a sua.'
-        : 'Quando alguém começar, a tela aparece aqui.',
-    };
+      text: EMBEDDED || IN_APP ? 'Quando alguém começar, a tela aparece aqui.'
+        : 'Quando alguém começar, a tela aparece aqui. Você também pode compartilhar a sua.',
+    } : EMBEDDED ? {
+      title: 'Sua transmissão aparece aqui',
+      text: 'Escolha a janela abaixo e clique em Iniciar transmissão.',
+    } : {
+      title: 'A transmissão ainda não começou',
+      text: 'Quando começar, a imagem aparece aqui sozinha.',
+    });
     const empty = document.createElement('div');
     empty.className = 'empty-room';
     const big = document.createElement('div');
@@ -575,6 +586,9 @@ function clearFrameQueue() {
 let audioCtx = null;
 let gainNode = null;
 let audioPlayhead = 0;
+let audioLead = AUDIO_MIN_LEAD;   // folga atual entre "agora" e o som agendado (cresce se houver falhas)
+let lastAudioGap = -Infinity;
+let audioGapCount = 0;            // quantas vezes o som falhou (diagnóstico)
 let muted = true;
 
 function playAudio(data) {
@@ -589,7 +603,19 @@ function playAudio(data) {
     }
 
     const now = audioCtx.currentTime;
-    if (audioPlayhead < now + 0.01 || audioPlayhead > now + AUDIO_MAX_LEAD) audioPlayhead = now + AUDIO_MIN_LEAD;
+    if (audioPlayhead < now + 0.01) {
+      // A fila esvaziou: os pacotes chegaram atrasados (rede oscilando ou página sem prioridade).
+      // Se isso se repete, aumenta a folga para o som não ficar picotado; com o tempo ela volta ao normal.
+      if (now - lastAudioGap < 5) audioLead = Math.min(AUDIO_MAX_LEAD - 0.05, audioLead + 0.04);
+      if (lastAudioGap > -Infinity) audioGapCount++;
+      lastAudioGap = now;
+      audioPlayhead = now + audioLead;
+    } else if (audioPlayhead > now + AUDIO_MAX_LEAD) {
+      audioPlayhead = now + audioLead;   // acumulou atraso: volta para perto do ao vivo
+    } else if (now - lastAudioGap > 30 && audioLead > AUDIO_MIN_LEAD) {
+      audioLead = Math.max(AUDIO_MIN_LEAD, audioLead - 0.01);   // meio minuto sem falhas: reduz a folga aos poucos
+      lastAudioGap = now;
+    }
     const src = audioCtx.createBufferSource();
     src.buffer = buffer;
     src.connect(gainNode);
@@ -803,6 +829,10 @@ if (!('VideoDecoder' in window)) {
   showRoomMessage('Link inválido', 'Peça o link completo para quem criou a sala.');
 } else {
   setMuted(true);
+  // Dentro do app o som já começa ligado (o app permite áudio sem clique); no navegador é preciso um clique.
+  if (EMBEDDED || IN_APP) {
+    try { enableAudio(); } catch { /* fica no "clique para ativar o som" */ }
+  }
   $('myName').textContent = storedName() || (EMBEDDED ? 'Anfitrião' : 'Convidado');
   render();
   connect();
