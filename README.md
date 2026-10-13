@@ -19,7 +19,8 @@
 
 ## Recursos
 
-- **Sala com várias telas**: quem entra pelo link também pode compartilhar a tela. As telas aparecem como miniaturas, e um clique expande a que você quer assistir.
+- **Transmissão ou sala**: na **Transmissão** só você transmite e os outros assistem; numa **sala**, quem entra também pode compartilhar a tela. As telas aparecem como miniaturas, e um clique expande a que você quer assistir.
+- **Salas salvas**: dê um nome à sala e reabra quando quiser. Cada abertura gera um código novo para mandar aos amigos.
 - **Duas formas de participar**: pelo navegador, sem instalar nada (Chrome ou Edge para compartilhar), ou pelo GameStream em **Entrar em uma sala**, para compartilhar com a mesma qualidade de quem criou a sala.
 - **Código da sala**: além do link, a sala tem um código como `spears-manhattan-calgary-until-482913`, para colar no GameStream. Ele é o próprio endereço da sala em outro formato e não depende de nenhum serviço.
 - **Link público gratuito e automático**: o app abre um [Cloudflare Quick Tunnel](https://try.cloudflare.com) e mostra um link `https://….trycloudflare.com`.
@@ -51,17 +52,24 @@ powershell -ExecutionPolicy Bypass -File tools/build-installer.ps1
 
 ## Como usar
 
-**Criar uma sala**
+**Transmitir (só você transmite)**
 
 1. Abra o **GameStream**. Na primeira vez ele baixa o `cloudflared` e o FFmpeg oficiais (~200 MB).
-2. Escolha a **janela do jogo** na lista. A predefinição **Recomendado** (720p, 30 fps) já vem escolhida; as outras opções ficam em **Configurações avançadas**.
+2. Na tela **Transmissão**, escolha a **janela do jogo**. A predefinição **Recomendado** (720p, 30 fps) já vem escolhida; as outras opções ficam em **Configurações avançadas**.
 3. Clique em **▶ Iniciar transmissão**.
-4. Mande para os amigos o **código da sala** (para quem tem o GameStream) ou o **link** (para abrir no navegador). Os dois ficam na lateral.
+4. Mande para os amigos o **código** (para quem tem o GameStream) ou o **link** (para abrir no navegador). Os dois ficam na lateral.
+
+**Criar uma sala (todos podem compartilhar)**
+
+1. No menu à esquerda, clique em **Salas**.
+2. Dê um nome e clique em **＋ Criar nova sala**. Ela fica salva em **Minhas salas**.
+3. Mande o código ou o link da sala para os amigos e clique em **Compartilhar minha tela na sala** quando quiser.
+4. **⬅ Salas** volta para a lista sem fechar a sala; **Encerrar sala** fecha, e ela continua salva para reabrir depois (com código novo).
 
 **Entrar na sala de um amigo**
 
 - **Pelo navegador:** abra o link no Chrome, Edge ou Safari atualizado. Para compartilhar a sua tela, clique em **🖥 Compartilhar minha tela** (Chrome ou Edge no computador).
-- **Pelo GameStream:** clique em **Entrar em uma sala**, escreva o seu nome, cole o código (ou o link) e clique em **Entrar**. Depois escolha a janela do jogo e clique em **Compartilhar minha tela na sala**.
+- **Pelo GameStream:** em **Salas**, escreva o seu nome (menu à esquerda), cole o código (ou o link) em **Entrar na sala de um amigo** e clique em **Entrar**. Depois escolha a janela do jogo e clique em **Compartilhar minha tela na sala**. As salas em que você entrou ficam em **Salas recentes**.
 
 Em qualquer um dos casos, clique numa miniatura para assistir àquela tela e em **🔊** para ligar o som (o navegador exige um clique para tocar áudio).
 

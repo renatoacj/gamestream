@@ -44,6 +44,9 @@ public sealed partial class RoomClient : IRoomSink, IDisposable
     public string Origin { get; }
 
     public string State { get; private set; } = "connecting";   // connecting | connected | closed
+
+    /// <summary>Nome de quem criou a sala (aparece no título e na lista de salas recentes).</summary>
+    public string? HostName { get; private set; }
     public string? Message { get; private set; }
 
     /// <summary>A sala recusou ou encerrou o nosso compartilhamento (motivo para mostrar ao usuário).</summary>
@@ -220,6 +223,10 @@ public sealed partial class RoomClient : IRoomSink, IDisposable
 
             switch (msg?["type"]?.GetValue<string>())
             {
+                case "room":
+                    HostName = (msg["people"] as JsonArray)?
+                        .FirstOrDefault(p => p?["host"]?.GetValue<bool>() == true)?["name"]?.GetValue<string>() ?? HostName;
+                    break;
                 case "unpublished":
                     _config = null;
                     PublishRejected?.Invoke(msg["reason"]?.GetValue<string>() ?? "A sala encerrou o seu compartilhamento.");
