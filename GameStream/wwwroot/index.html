@@ -11,19 +11,24 @@
 
   /* Barra de cima: quem está na sala */
   .topbar {
-    display: flex; align-items: center; gap: 10px; padding: 8px 16px;
-    background: var(--panel); border-bottom: 1px solid var(--border); min-height: 44px;
+    display: flex; align-items: center; gap: 12px; padding: 7px 14px;
+    background: var(--panel); border-bottom: 1px solid var(--border); min-height: 46px;
   }
+  .room-title { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; white-space: nowrap; }
+  .room-title .icon { color: var(--accent-2); }
   .topbar .people { display: flex; gap: 6px; flex: 1; overflow: hidden; }
   .chip {
+    display: inline-flex; align-items: center; gap: 5px;
     padding: 2px 10px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--border);
     font-size: 12px; white-space: nowrap;
   }
-  .chip.me { border-color: var(--accent); }
-  .chip.host::before { content: "👑 "; }
-  .chip-remove { margin-left: 6px; padding: 0 5px; font-size: 11px; line-height: 16px; border-radius: 999px; }
-  .chip-remove:hover { border-color: var(--live); color: var(--live); }
-  #nameBtn { font-size: 12px; padding: 4px 10px; }
+  .chip.me { border-color: rgba(124, 92, 255, .6); background: var(--accent-soft); }
+  .chip .icon { width: 12px; height: 12px; color: var(--warn); }
+  .chip-remove { margin: 0 -6px 0 2px; padding: 0; width: 18px; height: 18px; border-radius: 50%; border-color: transparent; background: transparent; color: var(--muted); }
+  .chip-remove .icon { color: inherit; }
+  .chip-remove:hover { color: var(--live); }
+  #nameBtn { font-size: 12px; padding: 5px 10px; }
+  #nameBtn .icon { width: 13px; height: 13px; }
 
   main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 
@@ -34,7 +39,7 @@
     position: absolute; inset: 0; display: grid; place-items: center;
     text-align: center; color: var(--muted); padding: 16px; pointer-events: none;
   }
-  .overlay .big { font-size: 20px; color: var(--text); margin-bottom: 6px; }
+  .overlay .big { font-size: 17px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
   .stage-top {
     position: absolute; top: 12px; left: 12px; right: 12px; display: flex; gap: 8px; align-items: center;
     opacity: 0; transition: opacity .2s; pointer-events: none;
@@ -60,10 +65,12 @@
   }
   .tile {
     position: relative; display: flex; flex-direction: column; gap: 6px; padding: 8px; text-align: left;
-    background: var(--panel-2); border: 2px solid transparent; border-radius: 12px; cursor: pointer;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px; cursor: pointer;
+    transition: border-color .12s;
   }
-  .tile:hover { border-color: var(--border); }
-  .tile.selected { border-color: var(--accent); }
+  .tile:hover { border-color: var(--border-strong); }
+  .tile.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .tile .thumb > .icon { width: 30px; height: 30px; stroke-width: 1.5; }
   .tile.mine { cursor: default; }
   .tile .thumb {
     aspect-ratio: 16 / 9; background: #000; border-radius: 8px; overflow: hidden;
@@ -82,20 +89,21 @@
   .tile .meta { display: flex; align-items: center; gap: 6px; min-width: 0; }
   .tile .meta b { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
   .tile .meta small { color: var(--muted); font-size: 11px; white-space: nowrap; }
-  .tile .kick { padding: 0 6px; font-size: 12px; line-height: 20px; }
-  .tile .speaker { padding: 0 5px; font-size: 13px; line-height: 20px; opacity: .65; }
-  .tile .speaker.on { opacity: 1; border-color: var(--ok); }
+  .tile .kick, .tile .speaker { padding: 0; width: 24px; height: 24px; flex: none; color: var(--muted); }
+  .tile .kick .icon, .tile .speaker .icon { width: 14px; height: 14px; }
+  .tile .kick:hover { color: var(--live); }
+  .tile .speaker.on { color: var(--ok); border-color: rgba(62, 207, 142, .5); }
   #volumeLabel { display: inline-block; width: 42px; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; }
   .bar label { display: flex; align-items: center; gap: 6px; }
   .tiles.strip .tile { padding: 4px; gap: 2px; }
   .tiles.strip .tile .live-tag { font-size: 9px; padding: 0 4px; top: 4px; left: 4px; }
   .tiles.strip .tile .meta b { font-size: 12px; }
   .empty-room { grid-column: 1 / -1; text-align: center; color: var(--muted); padding: 48px 16px; }
-  .empty-room .big { font-size: 20px; color: var(--text); margin-bottom: 6px; }
+  .empty-room .big { font-size: 17px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
 
   /* Barra de baixo */
   .bar {
-    display: flex; align-items: center; gap: 10px; padding: 8px 16px;
+    display: flex; align-items: center; gap: 8px; padding: 8px 14px;
     background: var(--panel); border-top: 1px solid var(--border); flex-wrap: wrap;
   }
   .bar .spacer { flex: 1; }
@@ -156,9 +164,9 @@
 </head>
 <body>
 <header class="topbar">
-  <b id="roomTitle">🎮 Sala</b>
+  <b id="roomTitle" class="room-title">Sala</b>
   <div class="people" id="people"></div>
-  <button id="nameBtn" title="Mudar meu nome">✎ <span id="myName">…</span></button>
+  <button id="nameBtn" data-icon="pencil" title="Mudar meu nome"><span id="myName">…</span></button>
 </header>
 
 <main>
@@ -168,17 +176,17 @@
       <div><div class="big" id="overlayTitle"></div><div id="overlayText"></div></div>
     </div>
     <div class="stage-top">
-      <button id="backBtn" title="Voltar para a lista de telas">⬅ Todas as telas</button>
+      <button id="backBtn" data-icon="arrow-left" title="Voltar para a lista de telas">Todas as telas</button>
       <span class="label" id="stageName"></span>
     </div>
-    <button id="unmute" hidden>🔊 Clique para ativar o som</button>
+    <button id="unmute" data-icon="volume" hidden>Clique para ativar o som</button>
   </section>
 
   <section class="tiles grid" id="tiles"></section>
 </main>
 
 <footer class="bar">
-  <button id="shareBtn" class="primary" hidden>🖥 Compartilhar minha tela</button>
+  <button id="shareBtn" class="primary" data-icon="monitor" hidden>Compartilhar minha tela</button>
   <select id="shareQuality" title="Qualidade do meu compartilhamento" hidden>
     <option value="1280x720@30@3000">720p · 30 fps</option>
     <option value="1920x1080@30@5000">1080p · 30 fps</option>
@@ -186,21 +194,22 @@
   </select>
   <span class="muted" id="info"></span>
   <span class="spacer"></span>
-  <button id="muteBtn" title="Ligar/desligar o som">🔇 Som desligado</button>
+  <button id="muteBtn" data-icon="volume-off" title="Ligar/desligar o som">Som desligado</button>
   <label title="Volume desta tela (lembrado por pessoa). Acima de 100% aumenta o som de quem transmite baixo.">
     <input type="range" id="volume" min="0" max="4" step="0.05" value="1"><span id="volumeLabel" class="muted">100%</span>
   </label>
-  <button id="fullscreen">⛶ Tela cheia</button>
+  <button id="fullscreen" data-icon="maximize">Tela cheia</button>
 </footer>
 
 <div id="toast" hidden></div>
 
-<dialog id="nameDialog">
+<dialog id="nameDialog" class="modal">
   <h2>Como você quer ser chamado?</h2>
   <input type="text" id="nameInput" maxlength="24" placeholder="Seu nome" autocomplete="off">
   <div class="actions"><button id="nameOk" class="primary">Entrar</button></div>
 </dialog>
 
+<script src="icons.js"></script>
 <script src="room.js"></script>
 </body>
 </html>

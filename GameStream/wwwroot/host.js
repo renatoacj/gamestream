@@ -248,6 +248,80 @@ async function stop() {
   refresh();
 }
 
+// ---------- Peças da interface ----------
+
+/** Ícone + texto num botão, sem redesenhar quando nada mudou (o status é relido a cada segundo). */
+function setButton(el, iconName, text) {
+  const key = iconName + '|' + text;
+  if (el.dataset.label === key) return;
+  el.dataset.label = key;
+  setLabel(el, iconName, text);
+}
+
+/** Pergunta de confirmação na janela do próprio app. Resolve com true se a pessoa confirmar. */
+function ask(title, text, okLabel = 'Confirmar', danger = false) {
+  const dlg = $('askDialog');
+  $('askTitle').textContent = title;
+  $('askText').textContent = text;
+  $('askOk').textContent = okLabel;
+  $('askOk').className = danger ? 'danger' : 'primary';
+  return new Promise((resolve) => {
+    let answer = false;
+    $('askOk').onclick = () => { answer = true; dlg.close(); };
+    $('askCancel').onclick = () => dlg.close();
+    dlg.onclose = () => resolve(answer);
+    dlg.showModal();
+  });
+}
+
+function initials(name) {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  const text = words.length > 1 ? words[0][0] + words[words.length - 1][0] : (words[0] || '?').slice(0, 2);
+  return text.toUpperCase();
+}
+
+/** Quadradinho colorido com as iniciais; a cor sai do nome, então é sempre a mesma para a mesma sala. */
+function avatar(name) {
+  let hash = 0;
+  for (const ch of name) hash = (hash * 31 + ch.codePointAt(0)) >>> 0;
+  const el = document.createElement('div');
+  el.className = 'avatar';
+  el.style.background = `linear-gradient(135deg, hsl(${hash % 360} 55% 46%), hsl(${(hash + 40) % 360} 55% 34%))`;
+  el.textContent = initials(name);
+  return el;
+}
+
+const shortDate = (at) => new Date(at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+
+/** Card de sala: avatar, nome, linha de detalhe, botão de apagar (some até passar o mouse) e a ação principal. */
+function roomCard({ name, detail, detailClass, open, action, onAction, primary, removeTitle, onRemove, removeDisabled }) {
+  const card = document.createElement('div');
+  card.className = 'room-card' + (open ? ' open' : '');
+  const top = document.createElement('div');
+  top.className = 'top';
+  const info = document.createElement('div');
+  info.className = 'info';
+  const title = document.createElement('b');
+  title.textContent = title.title = name;
+  const sub = document.createElement('small');
+  sub.className = detailClass || '';
+  sub.textContent = sub.title = detail;
+  info.append(title, sub);
+  const remove = document.createElement('button');
+  remove.className = 'remove icon-btn ghost';
+  remove.append(icon('trash'));
+  remove.title = removeTitle;
+  remove.disabled = !!removeDisabled;
+  remove.onclick = onRemove;
+  top.append(avatar(name), info, remove);
+  const go = document.createElement('button');
+  go.className = 'go' + (primary ? ' primary' : '');
+  go.textContent = action;
+  go.onclick = onAction;
+  card.append(top, go);
+  return card;
+}
+
 // ---------- Status ----------
 
 function showMessage(text, kind = 'muted') {
@@ -268,7 +342,6 @@ async function refresh() {
   const busy = s.state === 'starting';
   $('startBtn').hidden = live;
   $('startBtn').disabled = busy;
-  $('startBtn').textContent = busy ? '⏳ Iniciando…' : '▶ Iniciar transmissão';
   $('stopBtn').hidden = !live;
   for (const el of [...settingEls(), $('sourceBtn'), $('profilePreset')]) el.disabled = live || busy;
   $('liveBadge').classList.toggle('live', live);
@@ -296,8 +369,8 @@ async function refresh() {
     $('room').src = wanted;
   }
   const inRoom = !!joined || s.allowShare;
-  if (!busy) $('startBtn').textContent = inRoom ? '▶ Compartilhar minha tela na sala' : '▶ Iniciar transmissão';
-  $('stopBtn').textContent = inRoom ? '■ Parar de compartilhar' : '■ Parar';
+  setButton($('startBtn'), 'play', busy ? 'Iniciando…' : inRoom ? 'Compartilhar minha tela' : 'Iniciar transmissão');
+  setButton($('stopBtn'), 'stop', inRoom ? 'Parar de compartilhar' : 'Parar');
   renderView();
   if (!rotating) $('rotateBtn').disabled = !s.publicUrl;
 
@@ -315,19 +388,19 @@ function renderLink(s) {
     const status = document.createElement('div');
     status.className = 'muted';
     status.style.fontSize = '12.5px';
-    status.textContent = '⏳ ' + s.tunnelStatus;
+    status.textContent = s.tunnelStatus;
     box.append(status);
     return;
   }
   const row = document.createElement('div');
-  row.className = 'link';
+  row.className = 'copy-box';
   const code = document.createElement('code');
   code.textContent = code.title = s.publicUrl;
   const btn = document.createElement('button');
   btn.textContent = 'Copiar';
   btn.onclick = async () => {
     await navigator.clipboard.writeText(s.publicUrl);
-    btn.textContent = 'Copiado!';
+    btn.textContent = 'Copiado';
     setTimeout(() => (btn.textContent = 'Copiar'), 1500);
   };
   row.append(code, btn);
@@ -341,6 +414,7 @@ function renderLink(s) {
 // No servidor, a diferença entre as duas é só se os convidados podem compartilhar a tela.
 
 let view = 'broadcast';   // 'broadcast' | 'rooms'
+let lobbyKey = '';        // o que os cards da lista de salas estão mostrando
 let showList = false;     // na área de salas, ver a lista mesmo estando numa sala (ela continua aberta)
 let lastStatus = null;
 let joinedWith = '';      // código/link usado para entrar na sala atual (para a lista de recentes)
@@ -364,6 +438,7 @@ function renderView() {
   $('navBroadcast').classList.toggle('active', view === 'broadcast');
   $('navRooms').classList.toggle('active', view === 'rooms');
   $('lobby').hidden = !lobby;
+  $('newRoomBtn').hidden = !lobby;
   $('workspace').hidden = lobby;
   document.body.classList.toggle('no-side', lobby);
   $('liveBadge').hidden = lobby;
@@ -374,18 +449,16 @@ function renderView() {
     : (activeRoom()?.name || 'Minha sala');
   $('backToRoomsBtn').hidden = lobby || !(joined || own);
   $('roomActionBtn').hidden = lobby || !(joined || own);
-  $('roomActionBtn').textContent = joined ? 'Sair da sala' : 'Encerrar sala';
+  setButton($('roomActionBtn'), 'leave', joined ? 'Sair da sala' : 'Encerrar sala');
 
   // Painel lateral: código e link (transmissão ou sala própria) ou o aviso de convidado.
   $('hostSection').hidden = !!joined || lobby;
   $('guestSection').hidden = !joined;
   $('roomStats').hidden = !!joined || lobby;
-  $('codeTitle').textContent = own ? '🔑 Código da sala' : '🔑 Código para assistir';
+  $('codeTitle').textContent = own ? 'Código da sala' : 'Código para assistir';
+  $('asideTitle').textContent = joined ? 'Sala' : 'Convite';
   $('viewerLabel').textContent = own ? 'Pessoas na sala' : 'Pessoas assistindo';
   $('guestStreamsRow').hidden = !own;
-  $('modeHint').textContent = own
-    ? 'Quem entra com o código ou o link assiste e também pode compartilhar a própria tela. Ninguém controla seu PC por ele.'
-    : 'Quem tem o código ou o link só assiste à sua transmissão. Para todos poderem compartilhar, crie uma sala em Salas.';
   $('myName').disabled = !!joined;   // o nome vai junto ao entrar; para mudar, saia e entre de novo
 
   const box = $('joinMessage');
@@ -398,8 +471,14 @@ function renderView() {
     box.hidden = true;
   }
   if (lobby) {
-    renderMyRooms();
-    renderRecent();
+    const key = JSON.stringify([myRooms(), recentRooms(), activeRoom()?.id, !!joined]);
+    if (key !== lobbyKey) {
+      lobbyKey = key;
+      renderMyRooms();
+      renderRecent();
+    }
+  } else {
+    lobbyKey = '';
   }
 }
 
@@ -407,7 +486,7 @@ $('navRooms').onclick = () => { view = 'rooms'; showList = false; renderView(); 
 $('backToRoomsBtn').onclick = () => { showList = true; renderView(); };
 $('navBroadcast').onclick = async () => {
   if (joined) {
-    if (!confirm('Sair da sala e voltar para a sua transmissão?')) return;
+    if (!(await ask('Sair da sala?', 'Você volta para a sua transmissão.', 'Sair'))) return;
     await leaveRoom();
   } else if (inOwnRoom() && !(await endOwnRoom())) {
     return;
@@ -438,7 +517,7 @@ function activeRoom() {
 async function openRoom(room) {
   // Abrir uma sala gera um código novo: quem estava assistindo ou em outra sala precisa dele para entrar.
   const others = lastStatus?.viewers > 0;
-  if (others && !confirm(`Abrir "${room.name}" gera um código novo: quem está conectado agora será desconectado. Continuar?`)) return;
+  if (others && !(await ask(`Abrir "${room.name}"?`, 'A sala ganha um código novo e quem está conectado agora é desconectado.', 'Abrir'))) return;
   await fetch(api('rotate-key'), { method: 'POST' });
   await fetch(`${api('allow-share')}&on=1&name=${encodeURIComponent(room.name)}`, { method: 'POST' });
   activeRoomId = room.id;
@@ -450,6 +529,7 @@ async function openRoom(room) {
 
 async function createRoom() {
   const name = $('newRoomName').value.trim().slice(0, 32) || `Sala ${myRooms().length + 1}`;
+  $('newRoomDialog').close();
   const room = { id: Math.random().toString(36).slice(2, 10), name, at: Date.now() };
   storeMyRooms([room, ...myRooms()]);
   $('newRoomName').value = '';
@@ -461,7 +541,7 @@ async function createRoom() {
 /** Fecha a sala aberta (ela continua salva em "Minhas salas"). */
 async function endOwnRoom() {
   const name = activeRoom()?.name || 'a sala';
-  if (!confirm(`Encerrar "${name}"? Todos são desconectados e o código deixa de valer. A sala continua salva para você abrir de novo depois.`)) return false;
+  if (!(await ask(`Encerrar "${name}"?`, 'Todos são desconectados. A sala continua salva para abrir depois.', 'Encerrar', true))) return false;
   await fetch(`${api('allow-share')}&on=0`, { method: 'POST' });
   await fetch(api('rotate-key'), { method: 'POST' });
   activeRoomId = null;
@@ -475,53 +555,49 @@ function renderMyRooms() {
   const box = $('myRooms');
   box.textContent = '';
   const open = activeRoom();
-  for (const r of myRooms()) {
-    const row = document.createElement('div');
-    row.className = 'recent';
-    const info = document.createElement('div');
-    info.className = 'info';
-    const name = document.createElement('b');
-    name.textContent = r.name;
-    const when = document.createElement('small');
-    if (open?.id === r.id) {
-      when.className = 'open-tag';
-      when.textContent = '● Aberta agora';
-    } else {
-      when.textContent = 'Aberta pela última vez em ' + new Date(r.at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
-    }
-    info.append(name, when);
-
-    const go = document.createElement('button');
-    if (open?.id === r.id) {
-      go.textContent = 'Voltar para a sala';
-      go.className = 'primary';
-      go.onclick = () => { showList = false; renderView(); };
-    } else {
-      go.textContent = 'Abrir';
-      go.onclick = async () => {
+  const list = myRooms();
+  $('myRoomsCount').textContent = list.length;
+  for (const r of list) {
+    const isOpen = open?.id === r.id;
+    box.append(roomCard({
+      name: r.name,
+      detail: isOpen ? 'Aberta agora' : `Aberta em ${shortDate(r.at)}`,
+      detailClass: isOpen ? 'open-tag' : '',
+      open: isOpen,
+      primary: isOpen,
+      action: isOpen ? 'Voltar para a sala' : 'Abrir',
+      onAction: isOpen ? () => { showList = false; renderView(); } : async () => {
         if (joined) {
-          if (!confirm('Sair da sala do seu amigo para abrir a sua?')) return;
+          if (!(await ask('Sair da sala do seu amigo?', `Você sai dela para abrir "${r.name}".`, 'Sair e abrir'))) return;
           await leaveRoom();
         }
         await openRoom(r);
-      };
-    }
-    const remove = document.createElement('button');
-    remove.className = 'small-btn';
-    remove.textContent = '✕';
-    remove.title = 'Apagar esta sala da lista';
-    remove.disabled = open?.id === r.id;   // encerre a sala antes de apagá-la
-    remove.onclick = () => {
-      if (!confirm(`Apagar "${r.name}" da lista?`)) return;
-      storeMyRooms(myRooms().filter((x) => x.id !== r.id));
-      renderMyRooms();
-    };
-    row.append(info, go, remove);
-    box.append(row);
+      },
+      removeTitle: isOpen ? 'Encerre a sala antes de apagá-la' : 'Apagar esta sala',
+      removeDisabled: isOpen,
+      onRemove: async () => {
+        if (!(await ask(`Apagar "${r.name}"?`, 'Ela sai da sua lista de salas.', 'Apagar', true))) return;
+        storeMyRooms(myRooms().filter((x) => x.id !== r.id));
+        renderMyRooms();
+      },
+    }));
   }
+  const add = document.createElement('button');
+  add.className = 'room-card new';
+  add.append(icon('plus'), 'Nova sala');
+  add.onclick = openNewRoom;
+  box.append(add);
+}
+
+function openNewRoom() {
+  $('newRoomName').value = '';
+  $('newRoomDialog').showModal();
+  $('newRoomName').focus();
 }
 
 $('createRoomBtn').onclick = createRoom;
+$('newRoomBtn').onclick = openNewRoom;
+$('newRoomCancel').onclick = () => $('newRoomDialog').close();
 $('newRoomName').onkeydown = (e) => { if (e.key === 'Enter') createRoom(); };
 $('roomActionBtn').onclick = async () => {
   if (joined) await leaveRoom();
@@ -540,7 +616,7 @@ async function joinRoom(code) {
   if (!url) return;
   if (!myName()) {
     $('myName').focus();
-    showJoinError('Escreva o seu nome (no menu à esquerda) antes de entrar.');
+    showJoinError('Escreva o seu nome no menu à esquerda antes de entrar.');
     return;
   }
   $('joinBtn').disabled = true;
@@ -597,27 +673,14 @@ function renderRecent() {
   const box = $('recentRooms');
   box.textContent = '';
   for (const r of list) {
-    const row = document.createElement('div');
-    row.className = 'recent';
-    const info = document.createElement('div');
-    info.className = 'info';
-    const name = document.createElement('b');
-    name.textContent = r.label ? `Sala de ${r.label}` : 'Sala';
-    const code = document.createElement('code');
-    code.textContent = r.code.length > 60 ? r.code.slice(0, 57) + '…' : r.code;
-    const when = document.createElement('small');
-    when.textContent = 'Usada em ' + new Date(r.at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
-    info.append(name, code, when);
-    const enter = document.createElement('button');
-    enter.textContent = 'Entrar';
-    enter.onclick = () => joinRoom(r.code);
-    const remove = document.createElement('button');
-    remove.className = 'small-btn';
-    remove.textContent = '✕';
-    remove.title = 'Tirar da lista';
-    remove.onclick = () => { storeRooms(recentRooms().filter((x) => x.code !== r.code)); renderRecent(); };
-    row.append(info, enter, remove);
-    box.append(row);
+    box.append(roomCard({
+      name: r.label ? `Sala de ${r.label}` : 'Sala',
+      detail: `${shortDate(r.at)} · ${r.code}`,
+      action: 'Entrar',
+      onAction: () => joinRoom(r.code),
+      removeTitle: 'Tirar da lista',
+      onRemove: () => { storeRooms(recentRooms().filter((x) => x.code !== r.code)); renderRecent(); },
+    }));
   }
 }
 
@@ -636,7 +699,7 @@ function renderCode(s) {
 $('codeCopy').onclick = async () => {
   if (!shownCode) return;
   await navigator.clipboard.writeText(shownCode);
-  $('codeCopy').textContent = 'Copiado!';
+  $('codeCopy').textContent = 'Copiado';
   setTimeout(() => ($('codeCopy').textContent = 'Copiar'), 1500);
 };
 
@@ -655,7 +718,7 @@ try { setSideCollapsed(localStorage.getItem('gamestream-side-collapsed') === '1'
 
 let rotating = false;
 $('rotateBtn').onclick = async () => {
-  if (!confirm('Gerar um código e um link novos? Todos são desconectados e precisarão do código ou link novo.')) return;
+  if (!(await ask('Gerar um código novo?', 'Todos são desconectados e precisam do código ou link novo para voltar.', 'Gerar'))) return;
   rotating = true;
   $('rotateBtn').disabled = true;
   await fetch(api('rotate-key'), { method: 'POST' });
