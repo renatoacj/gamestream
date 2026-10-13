@@ -64,14 +64,9 @@
     .name-field input { width: 150px; }
   }
 
-  /* Configurações avançadas: recolhidas por padrão */
-  details#advanced > summary {
-    cursor: pointer; user-select: none; padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px;
-    background: var(--panel); font-weight: 600; list-style-position: inside;
-  }
-  details#advanced > summary:hover { border-color: var(--accent); }
-  details#advanced > summary .muted { font-weight: 400; font-size: 12.5px; margin-left: 8px; }
-  details#advanced[open] > summary { margin-bottom: 12px; }
+  /* Configurações avançadas: um botão ao lado da predefinição abre e fecha o painel */
+  #advancedBtn.active { border-color: var(--accent); background: var(--panel); }
+  #advancedSummary { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   fieldset {
     border: 1px solid var(--border); border-radius: 10px; background: var(--panel);
     padding: 10px 12px 12px; margin: 0; min-width: 0;
@@ -210,12 +205,13 @@
       <option value="light">Internet fraca — 540p 30 fps, 2,5 Mbps</option>
       <option value="">Personalizado</option>
     </select>
+    <button id="advancedBtn" title="Abrir ou fechar as configurações de vídeo, codificação e áudio" aria-expanded="false">⚙ Configurações avançadas</button>
+    <span class="muted" id="advancedSummary"></span>
     <span class="spacer"></span>
     <button id="logBtn" class="small-btn" title="Abre o arquivo com os detalhes técnicos (útil para relatar um problema)">📄 Ver log</button>
   </div>
 
-  <details id="advanced">
-  <summary>⚙ Configurações avançadas <span class="muted" id="advancedSummary"></span></summary>
+  <div id="advanced" hidden>
   <div class="settings">
     <fieldset>
       <legend>Vídeo</legend>
@@ -324,7 +320,7 @@
       <div class="hint">"Só da janela" pega o som apenas do programa escolhido (Windows 11). Com um monitor, usa todo o som do PC. Com o ganho automático, o medidor deve chegar ao amarelo nas partes altas.</div>
     </fieldset>
   </div>
-  </details>
+  </div>
 </main>
 
 <aside>

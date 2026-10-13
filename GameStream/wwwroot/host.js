@@ -91,22 +91,26 @@ function updateAdvancedSummary() {
 $('profilePreset').onchange = () => {
   const p = PRESETS[$('profilePreset').value];
   if (p) applySettings(p);
-  else $('advanced').open = true;   // "Personalizado": abre as configurações para ajustar
+  else setAdvancedOpen(true);   // "Personalizado": abre as configurações para ajustar
   updateAdvancedSummary();
   savePrefs();
 };
 for (const el of settingEls()) {
   el.addEventListener('change', () => {
-    // Mexeu em vídeo/codificação: passa a ser "Personalizado" (áudio não faz parte das predefinições).
-    if (!el.id.startsWith('audio')) $('profilePreset').value = '';
+    $('profilePreset').value = '';   // mexeu em qualquer configuração avançada: passa a ser "Personalizado"
     updateAdvancedSummary();
     savePrefs();
   });
 }
-$('advanced').addEventListener('toggle', () => {
-  try { localStorage.setItem('gamestream-advanced-open', $('advanced').open ? '1' : '0'); } catch { /* sem armazenamento */ }
-});
-try { $('advanced').open = localStorage.getItem('gamestream-advanced-open') === '1'; } catch { /* sem armazenamento */ }
+
+function setAdvancedOpen(open, save = true) {
+  $('advanced').hidden = !open;
+  $('advancedBtn').classList.toggle('active', open);
+  $('advancedBtn').setAttribute('aria-expanded', String(open));
+  if (save) { try { localStorage.setItem('gamestream-advanced-open', open ? '1' : '0'); } catch { /* sem armazenamento */ } }
+}
+$('advancedBtn').onclick = () => setAdvancedOpen($('advanced').hidden);
+try { setAdvancedOpen(localStorage.getItem('gamestream-advanced-open') === '1', false); } catch { /* sem armazenamento */ }
 
 // ---------- Janelas e monitores (com miniaturas) ----------
 
