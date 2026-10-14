@@ -156,7 +156,7 @@ public sealed partial class RoomClient : IRoomSink, IDisposable
             if (token.IsCancellationRequested) break;
             State = "connecting";
             Message ??= "A conexão com a sala caiu. Tentando de novo…";
-            try { await Task.Delay(TimeSpan.FromSeconds(3), token); } catch (OperationCanceledException) { break; }
+            try { await Task.Delay(TimeSpan.FromSeconds(_connected ? 3 : 5), token); } catch (OperationCanceledException) { break; }
         }
         _connected = false;
         State = "closed";
@@ -233,6 +233,9 @@ public sealed partial class RoomClient : IRoomSink, IDisposable
                     break;
                 case "full":
                     Message = "A sala está cheia. Tentando entrar de novo…";
+                    return false;
+                case "closed":
+                    Message = "A sala está fechada. Quando quem a criou abrir de novo, você entra sozinho.";
                     return false;
                 case "expired":
                     Message = "Este código não vale mais: quem criou a sala gerou um novo.";

@@ -100,30 +100,73 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
     private DateTime _pinWindowStart = DateTime.UtcNow;
     private DateTime _pinBlockedUntil;
 
+    private enum KeyCheck { Wrong, Ok, Closed }
+
+    /// <summary>
+    /// Chaves de salas fechadas nesta execução do app (cada sala salva tem a sua). Quem chega com uma delas
+    /// ouve "a sala está fechada" em vez de "código errado", e a página fica esperando a sala reabrir.
+    /// </summary>
+    private readonly List<(string Key, string Pin)> _closedKeys = [];
+    private const int MaxClosedKeys = 32;
+
     /// <summary>Confere a chave de quem quer entrar: a chave longa do link ou a senha curta do código.</summary>
-    private bool ViewerKeyMatches(string? provided)
+    private bool ViewerKeyMatches(string? provided) => CheckViewerKey(provided) == KeyCheck.Ok;
+
+    private KeyCheck CheckViewerKey(string? provided)
     {
-        if (KeyMatches(provided, ViewKey)) return true;
-        if (provided == null || provided.Length != RoomPin.Length) return false;   // nem parece a senha curta
+        if (provided == null) return KeyCheck.Wrong;
+        if (KeyMatches(provided, ViewKey)) return KeyCheck.Ok;
+        var isPin = provided.Length == RoomPin.Length;
 
         lock (_pinLock)
         {
             var now = DateTime.UtcNow;
-            if (now < _pinBlockedUntil) return false;
-            if (now - _pinWindowStart > PinWindow)
+            if (isPin)
             {
-                _pinWindowStart = now;
-                _wrongPins = 0;
+                // Durante o bloqueio nenhuma senha curta é aceita, nem para dizer que a sala está fechada.
+                if (now < _pinBlockedUntil) return KeyCheck.Wrong;
+                if (now - _pinWindowStart > PinWindow)
+                {
+                    _pinWindowStart = now;
+                    _wrongPins = 0;
+                }
+                if (KeyMatches(provided, RoomPin)) return KeyCheck.Ok;
             }
-            if (KeyMatches(provided, RoomPin)) return true;
-            if (++_wrongPins >= MaxWrongPins)
+            foreach (var (key, pin) in _closedKeys)
+            {
+                if (KeyMatches(provided, key) || (isPin && KeyMatches(provided, pin))) return KeyCheck.Closed;
+            }
+            if (isPin && ++_wrongPins >= MaxWrongPins)
             {
                 // Alguém está chutando: a entrada por código para por um tempo (o link continua valendo).
                 _pinBlockedUntil = now + PinWindow;
                 _wrongPins = 0;
                 Tools.Log("Muitas tentativas erradas de código: entrada por código bloqueada por 5 minutos.");
             }
-            return false;
+            return KeyCheck.Wrong;
+        }
+    }
+
+    /// <summary>
+    /// Troca a chave e a senha curta por outras já conhecidas (as da sala salva que está sendo aberta, ou as da
+    /// transmissão). As anteriores ficam guardadas como "fechadas": quem estava conectado espera e volta sozinho
+    /// quando elas forem usadas de novo.
+    /// </summary>
+    private void SetViewKey(string key, string pin)
+    {
+        if (key == ViewKey && pin == RoomPin) return;
+        lock (_pinLock)
+        {
+            _closedKeys.RemoveAll(k => k.Key == ViewKey || k.Key == key);
+            _closedKeys.Add((ViewKey, RoomPin));
+            if (_closedKeys.Count > MaxClosedKeys) _closedKeys.RemoveAt(0);
+            ViewKey = key;
+            RoomPin = pin;
+        }
+        foreach (var p in _people.Values.Where(p => !p.IsHost))
+        {
+            p.EnqueueText("""{"type":"closed"}""");
+            _ = Task.Delay(500).ContinueWith(_ => p.Abort());
         }
     }
 
@@ -211,8 +254,13 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
 
         MapHostApi(app);
         // O app de um convidado confere a chave antes de insistir na conexão: 204 = vale, 401 = código/link errado.
-        app.MapGet("/api/check", (HttpContext ctx) =>
-            ViewerKeyMatches(ctx.Request.Query["k"]) ? Results.NoContent() : Results.Unauthorized());
+        // 204 = pode entrar; 423 = a sala existe mas está fechada (vai reabrir); 401 = chave errada.
+        app.MapGet("/api/check", (HttpContext ctx) => CheckViewerKey(ctx.Request.Query["k"]) switch
+        {
+            KeyCheck.Ok => Results.NoContent(),
+            KeyCheck.Closed => Results.StatusCode(StatusCodes.Status423Locked),
+            _ => Results.Unauthorized(),
+        });
         app.Map("/ws", HandleWebSocket);
 
         try
@@ -250,6 +298,8 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
                 viewers = ViewerCount,
                 maxViewers = MaxViewers,
                 allowShare = AllowGuestShare,
+                viewKey = ViewKey,
+                pin = RoomPin,
                 guestStreams = _streams.Values.Count(s => s.No != HostStreamNo),
                 publicUrl = publicUrl == null ? null : $"{publicUrl}/?k={ViewKey}",
                 tunnelStatus = Tunnel?.Status ?? "Desativado",
@@ -358,6 +408,14 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
         app.MapPost("/api/allow-share", (HttpContext ctx) =>
         {
             if (!IsHost(ctx)) return Results.Unauthorized();
+            // Opcional: a chave da sala salva que está sendo aberta (ou a da transmissão, ao voltar para ela).
+            var key = ctx.Request.Query["key"].ToString();
+            var pin = ctx.Request.Query["pin"].ToString();
+            if (key != "" || pin != "")
+            {
+                if (!ViewKeyPattern().IsMatch(key) || !PinPattern().IsMatch(pin)) return Results.BadRequest();
+                SetViewKey(key, pin);
+            }
             RoomName = CleanRoomName(ctx.Request.Query["name"]);
             SetAllowGuestShare(ctx.Request.Query["on"] == "1");
             return Results.Ok();
@@ -539,13 +597,21 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
 
         var role = ctx.Request.Query["role"].ToString();
         // "host" é a sala embutida na janela do app: não conta no limite e exige o token do app.
-        var allowed = role switch
+        var check = role switch
         {
-            "viewer" => ViewerKeyMatches(ctx.Request.Query["k"]),
-            "host" => IsHost(ctx),
-            _ => false,
+            "viewer" => CheckViewerKey(ctx.Request.Query["k"]),
+            "host" => IsHost(ctx) ? KeyCheck.Ok : KeyCheck.Wrong,
+            _ => KeyCheck.Wrong,
         };
-        if (!allowed)
+        if (check == KeyCheck.Closed)
+        {
+            // Sala fechada por enquanto: avisa e desconecta; a página tenta de novo até ela reabrir.
+            var waiting = new Participant(NewToken(6), await ctx.WebSockets.AcceptWebSocketAsync(), isHost: false);
+            waiting.EnqueueText("""{"type":"closed"}""");
+            await waiting.RunSendLoopAsync(closeWhenEmpty: true);
+            return;
+        }
+        if (check != KeyCheck.Ok)
         {
             ctx.Response.StatusCode = 401;
             return;
@@ -608,6 +674,12 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
 
     [GeneratedRegex(@"^[0-9a-f]{8,32}$")]
     private static partial Regex DevicePattern();
+
+    [GeneratedRegex(@"^[0-9a-f]{24}$")]
+    private static partial Regex ViewKeyPattern();
+
+    [GeneratedRegex(@"^[0-9]{6}$")]
+    private static partial Regex PinPattern();
 
     [GeneratedRegex(@"^(avc1\.[0-9a-fA-F]{6}|vp8|vp09\.\d\d\.\d\d\.\d\d|av01\.[0-9A-Za-z.]{5,24})$")]
     private static partial Regex VideoCodecPattern();

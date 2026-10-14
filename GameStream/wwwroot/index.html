@@ -86,6 +86,18 @@
     color: #fff; font-size: 14px; font-weight: 600; opacity: 0; transition: opacity .15s;
   }
   .tile:not(.mine):not(.selected):hover .expand-hint { opacity: 1; }
+  /* A própria tela fica só em miniatura (atualizada a cada poucos segundos) para poupar o PC de quem
+     transmite. Sem este aviso, a imagem parada parece uma transmissão travada. */
+  .tile.paused .thumb img { filter: brightness(.45); }
+  .tile .paused-tag {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); max-width: 90%;
+    display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px;
+    background: rgba(15, 17, 21, .85); border: 1px solid var(--border-strong); color: var(--text);
+    font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .tile .paused-tag::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--live); flex: none; animation: pulse 1.4s infinite; }
+  .tile.paused:hover .paused-tag { display: none; }
+  .tiles.strip .tile .paused-tag { font-size: 10px; padding: 2px 7px; }
   .tile .meta { display: flex; align-items: center; gap: 6px; min-width: 0; }
   .tile .meta b { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
   .tile .meta small { color: var(--muted); font-size: 11px; white-space: nowrap; }

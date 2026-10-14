@@ -522,12 +522,33 @@ function activeRoom() {
   return inOwnRoom() ? myRooms().find((r) => r.id === activeRoomId) || null : null;
 }
 
+// Cada sala salva tem a sua chave (o "?k=" do link e os 6 números do código). Ao reabrir a sala, a chave
+// volta a valer: quem estava nela entra de novo sozinho. A transmissão também guarda a dela.
+// As palavras do começo do código vêm do endereço do túnel, que muda quando o app é fechado e aberto.
+let broadcastKey = null;   // { key, pin } da transmissão, para voltar a ela ao encerrar uma sala
+
+function randomHex(bytes) {
+  return [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function randomPin() {
+  const max = 4_000_000_000;   // múltiplo de 1.000.000 abaixo de 2^32: sem viés
+  let n;
+  do { n = crypto.getRandomValues(new Uint32Array(1))[0]; } while (n >= max);
+  return String(n % 1_000_000).padStart(6, '0');
+}
+
+const keyQuery = (k) => (k ? `&key=${k.key}&pin=${k.pin}` : '');
+
 async function openRoom(room) {
-  // Abrir uma sala gera um código novo: quem estava assistindo ou em outra sala precisa dele para entrar.
   const others = lastStatus?.viewers > 0;
-  if (others && !(await ask(`Abrir "${room.name}"?`, 'A sala ganha um código novo e quem está conectado agora é desconectado.', 'Abrir'))) return;
-  await fetch(api('rotate-key'), { method: 'POST' });
-  await fetch(`${api('allow-share')}&on=1&name=${encodeURIComponent(room.name)}`, { method: 'POST' });
+  if (others && !(await ask(`Abrir "${room.name}"?`, 'Quem está conectado agora sai e volta sozinho quando você voltar para onde estava.', 'Abrir'))) return;
+  if (!room.key) {
+    room = { ...room, key: randomHex(12), pin: randomPin() };
+    storeMyRooms(myRooms().map((r) => (r.id === room.id ? room : r)));
+  }
+  if (lastStatus && !lastStatus.allowShare && !joined) broadcastKey = { key: lastStatus.viewKey, pin: lastStatus.pin };
+  await fetch(`${api('allow-share')}&on=1&name=${encodeURIComponent(room.name)}${keyQuery(room)}`, { method: 'POST' });
   activeRoomId = room.id;
   try { sessionStorage.setItem('gamestream-active-room', room.id); } catch { /* sem armazenamento */ }
   storeMyRooms(myRooms().map((r) => (r.id === room.id ? { ...r, at: Date.now() } : r)));
@@ -549,9 +570,13 @@ async function createRoom() {
 /** Fecha a sala aberta (ela continua salva em "Minhas salas"). */
 async function endOwnRoom() {
   const name = activeRoom()?.name || 'a sala';
-  if (!(await ask(`Encerrar "${name}"?`, 'Todos são desconectados. A sala continua salva para abrir depois.', 'Encerrar', true))) return false;
-  await fetch(`${api('allow-share')}&on=0`, { method: 'POST' });
-  await fetch(api('rotate-key'), { method: 'POST' });
+  if (!(await ask(`Encerrar "${name}"?`, 'Quem está na sala fica esperando e entra de novo sozinho quando você reabrir. O código continua o mesmo enquanto o app estiver aberto.', 'Encerrar', true))) return false;
+  if (broadcastKey) {
+    await fetch(`${api('allow-share')}&on=0${keyQuery(broadcastKey)}`, { method: 'POST' });
+  } else {
+    await fetch(`${api('allow-share')}&on=0`, { method: 'POST' });
+    await fetch(api('rotate-key'), { method: 'POST' });
+  }
   activeRoomId = null;
   try { sessionStorage.removeItem('gamestream-active-room'); } catch { /* sem armazenamento */ }
   showList = false;
@@ -710,7 +735,16 @@ $('codeCopy').onclick = async () => {
   setTimeout(() => ($('codeCopy').textContent = 'Copiar'), 1500);
 };
 
-// ---------- Painel lateral recolhível ----------
+// ---------- Menu e painel lateral recolhíveis ----------
+
+function setNavCollapsed(collapsed, save = true) {
+  document.body.classList.toggle('nav-collapsed', collapsed);
+  $('navToggle').replaceChildren(icon(collapsed ? 'panel-left-open' : 'panel-left-close'));
+  $('navToggle').title = collapsed ? 'Expandir o menu' : 'Recolher o menu';
+  if (save) { try { localStorage.setItem('gamestream-nav-collapsed', collapsed ? '1' : '0'); } catch { /* sem armazenamento */ } }
+}
+$('navToggle').onclick = () => setNavCollapsed(!document.body.classList.contains('nav-collapsed'));
+try { setNavCollapsed(localStorage.getItem('gamestream-nav-collapsed') === '1', false); } catch { setNavCollapsed(false, false); }
 
 function setSideCollapsed(collapsed, save = true) {
   document.body.classList.toggle('side-collapsed', collapsed);
@@ -730,6 +764,11 @@ $('rotateBtn').onclick = async () => {
   $('rotateBtn').disabled = true;
   await fetch(api('rotate-key'), { method: 'POST' });
   rotating = false;
+  // Guarda a chave nova na sala aberta (ou na transmissão), para valer também nas próximas aberturas.
+  const s = await (await fetch(api('status'))).json().catch(() => null);
+  const room = activeRoom();
+  if (s && room) storeMyRooms(myRooms().map((r) => (r.id === room.id ? { ...r, key: s.viewKey, pin: s.pin } : r)));
+  else if (s && !s.allowShare) broadcastKey = { key: s.viewKey, pin: s.pin };
   refresh();
 };
 $('maxViewers').onchange = () => {
