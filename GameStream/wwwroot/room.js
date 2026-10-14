@@ -90,6 +90,12 @@ function connect() {
     people = [];
     render();
     if (closedReason === 'expired') return;   // link trocado: não adianta tentar de novo
+    if (closedReason === 'closed') {
+      // Sala fechada por enquanto: confere de tempos em tempos e entra sozinho quando ela reabrir.
+      closedReason = null;
+      setTimeout(connect, 5000);
+      return;
+    }
     if (closedReason === 'full') {
       closedReason = null;
       setTimeout(connect, 10_000);
@@ -156,6 +162,11 @@ function onControl(msg) {
     case 'full':
       closedReason = 'full';
       showRoomMessage('A sala está cheia', 'O limite de pessoas foi atingido. Tentando entrar de novo a cada 10 segundos…');
+      break;
+
+    case 'closed':
+      closedReason = 'closed';
+      showRoomMessage('A sala está fechada', 'Quando quem a criou abrir de novo, você entra sozinho.');
       break;
 
     case 'expired':
@@ -376,10 +387,11 @@ function renderTiles() {
   for (const s of [...streams.values()].sort((a, b) => a.no - b.no)) {
     const mine = isMine(s);
     const tile = document.createElement('div');
-    tile.className = 'tile' + (s.no === watching ? ' selected' : '') + (mine ? ' mine' : '');
+    const own = isOwnBroadcast(s);
+    const paused = mine || (own && s.no !== watching);
+    tile.className = 'tile' + (s.no === watching ? ' selected' : '') + (mine ? ' mine' : '') + (paused ? ' paused' : '');
     tile.dataset.no = s.no;
     tile.tabIndex = mine ? -1 : 0;
-    const own = isOwnBroadcast(s);
     tile.title = mine ? 'Esta é a sua tela'
       : own ? 'Sua transmissão. A prévia fica pausada para poupar o PC; clique para ver ao vivo.'
       : `Assistir à tela de ${s.name}`;
@@ -401,6 +413,13 @@ function renderTiles() {
     hint.className = 'expand-hint';
     hint.textContent = own ? 'Ver prévia ao vivo' : 'Assistir';
     thumb.append(live, hint);
+    if (paused) {
+      // Para quem transmite: a imagem parada é proposital, os outros estão vendo ao vivo.
+      const tag = document.createElement('span');
+      tag.className = 'paused-tag';
+      tag.textContent = 'Transmitindo · prévia pausada';
+      thumb.append(tag);
+    }
 
     const meta = document.createElement('div');
     meta.className = 'meta';
@@ -462,6 +481,7 @@ let configSeq = 0;
 let framesDrawn = 0;
 setInterval(() => {
   $('info').textContent = live && watching !== null ? `${canvas.width}×${canvas.height} · ${Math.round(framesDrawn / 2)} fps` : '';
+  $('info').title = `Folga contra oscilação da rede: ${Math.round(playoutDelay / 1000)} ms`;
   framesDrawn = 0;
 }, 2000);
 
@@ -518,8 +538,12 @@ function resetDecoders() {
 // assim que chega, guardamos alguns em fila e mostramos cada quadro no horário dele
 // (timestamp de quem transmite + atraso fixo). Assim 60 fps aparecem como 60 fps uniformes.
 
-const PLAYOUT_DELAY_US = 80_000;     // folga para absorver a variação da rede
-const MAX_AHEAD_US = 300_000;        // fila maior que isso = atraso acumulado: ressincroniza
+const PLAYOUT_MIN_US = 80_000;       // folga mínima para absorver a variação da rede
+const PLAYOUT_MAX_US = 400_000;      // folga máxima (mais que isso deixa o vídeo atrasado demais)
+const PLAYOUT_STEP_US = 20_000;
+const MAX_AHEAD_US = 250_000;        // fila maior que folga + isso = atraso acumulado: ressincroniza
+let playoutDelay = PLAYOUT_MIN_US;   // folga atual: cresce quando quadros chegam atrasados
+let lastLateAt = 0;
 const MAX_QUEUE = 30;
 
 let frameQueue = [];
@@ -538,14 +562,29 @@ function enqueueFrame(frame) {
   frameQueue.push(frame);
   while (frameQueue.length > MAX_QUEUE) frameQueue.shift().close();
 
-  // Chegando atrasado demais (rede engasgou) ou adiantado demais (fila crescendo): realinha.
   const due = frame.timestamp + playoutOffset;
   const now = localMicros();
-  if (due < now - PLAYOUT_DELAY_US || due > now + MAX_AHEAD_US) resyncPlayout(frame.timestamp);
+  if (due < now) {
+    // Chegou depois do horário de aparecer: a rede oscila mais que a folga atual, e o vídeo engasga.
+    // Aumenta a folga um pouco (o vídeo fica um tiquinho mais atrasado, mas fluido).
+    lastLateAt = now;
+    if (playoutDelay < PLAYOUT_MAX_US) {
+      playoutDelay += PLAYOUT_STEP_US;
+      playoutOffset += PLAYOUT_STEP_US;
+    }
+    if (due < now - playoutDelay) resyncPlayout(frame.timestamp);   // engasgo grande: realinha de vez
+  } else if (due > now + playoutDelay + MAX_AHEAD_US) {
+    resyncPlayout(frame.timestamp);   // fila crescendo: volta para perto do ao vivo
+  } else if (playoutDelay > PLAYOUT_MIN_US && now - lastLateAt > 20_000_000) {
+    // 20 s sem atraso: reduz a folga aos poucos para voltar a ficar perto do ao vivo.
+    playoutDelay -= PLAYOUT_STEP_US / 2;
+    playoutOffset -= PLAYOUT_STEP_US / 2;
+    lastLateAt = now - 10_000_000;
+  }
 }
 
 function resyncPlayout(ts) {
-  playoutOffset = localMicros() + PLAYOUT_DELAY_US - ts;
+  playoutOffset = localMicros() + playoutDelay - ts;
 }
 
 function renderLoop() {

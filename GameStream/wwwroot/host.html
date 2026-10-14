@@ -18,6 +18,16 @@
   .nav-btn.active::before { content: ""; position: absolute; left: -10px; top: 8px; bottom: 8px; width: 3px; border-radius: 0 3px 3px 0; background: var(--accent); }
   .nav-btn .icon { width: 17px; height: 17px; }
   nav .grow { flex: 1; }
+  #navToggle { align-self: flex-end; margin: -4px 0 6px; }
+
+  /* Menu recolhido: uma faixa estreita só com os ícones (o mesmo visual de janelas médias). */
+  body.nav-collapsed { grid-template-columns: 58px 1fr 312px; }
+  body.nav-collapsed.side-collapsed, body.nav-collapsed.no-side { grid-template-columns: 58px 1fr; }
+  body.nav-collapsed nav { padding: 12px 8px; }
+  body.nav-collapsed .nav-btn span.label, body.nav-collapsed nav .name-field { display: none; }
+  body.nav-collapsed .nav-btn { justify-content: center; padding: 10px 0; }
+  body.nav-collapsed .nav-btn.active::before { left: -8px; }
+  body.nav-collapsed #navToggle { align-self: center; }
   nav .name-field { display: flex; flex-direction: column; gap: 5px; padding: 10px 4px 0; border-top: 1px solid var(--border); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
   nav .name-field input { width: 100%; font-size: 13px; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--text); }
 
@@ -184,6 +194,7 @@
     .nav-btn span.label, nav .name-field { display: none; }
     .nav-btn { justify-content: center; padding: 10px 0; }
     .nav-btn.active::before { left: -8px; }
+    #navToggle { display: none; }
   }
 
   /* Janela estreita: o painel lateral vai para baixo e a página inteira rola. */
@@ -201,6 +212,7 @@
 </head>
 <body>
 <nav>
+  <button id="navToggle" class="icon-btn ghost" title="Recolher o menu"></button>
   <button id="navBroadcast" class="nav-btn active" data-icon="radio" title="Transmitir a sua tela (só você transmite)"><span class="label">Transmissão</span></button>
   <button id="navRooms" class="nav-btn" data-icon="users" title="Salas onde todos podem compartilhar a tela"><span class="label">Salas</span></button>
   <div class="grow"></div>
