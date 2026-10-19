@@ -89,7 +89,6 @@ function updateAdvancedSummary() {
 $('profilePreset').onchange = () => {
   const p = PRESETS[$('profilePreset').value];
   if (p) applySettings(p);
-  else setAdvancedOpen(true);   // "Personalizado": abre as configurações para ajustar
   updateAdvancedSummary();
   savePrefs();
 };
@@ -101,14 +100,29 @@ for (const el of settingEls()) {
   });
 }
 
-function setAdvancedOpen(open, save = true) {
-  $('advanced').hidden = !open;
-  $('advancedBtn').classList.toggle('active', open);
-  $('advancedBtn').setAttribute('aria-expanded', String(open));
-  if (save) { try { localStorage.setItem('gamestream-advanced-open', open ? '1' : '0'); } catch { /* sem armazenamento */ } }
+// ---------- Opções do app (bandeja e iniciar com o Windows) ----------
+
+async function loadAppSettings() {
+  try {
+    const s = await (await fetch(api('app-settings'))).json();
+    $('optTray').checked = s.closeToTray;
+    $('optAutostart').checked = s.startWithWindows;
+  } catch { /* app fechando */ }
 }
-$('advancedBtn').onclick = () => setAdvancedOpen($('advanced').hidden);
-try { setAdvancedOpen(localStorage.getItem('gamestream-advanced-open') === '1', false); } catch { /* sem armazenamento */ }
+
+async function saveAppSettings() {
+  const res = await fetch(api('app-settings'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ closeToTray: $('optTray').checked, startWithWindows: $('optAutostart').checked }),
+  }).catch(() => null);
+  const error = res && !res.ok ? (await res.json().catch(() => ({}))).error : null;
+  $('appSettingsError').textContent = error || '';
+  $('appSettingsError').hidden = !error;
+  loadAppSettings();   // mostra o estado real (ex.: se o Windows recusou a mudança)
+}
+$('optTray').onchange = saveAppSettings;
+$('optAutostart').onchange = saveAppSettings;
 
 // ---------- Janelas e monitores (com miniaturas) ----------
 
@@ -352,6 +366,7 @@ async function refresh() {
   $('startBtn').disabled = busy;
   $('stopBtn').hidden = !live;
   for (const el of [...settingEls(), $('sourceBtn'), $('profilePreset')]) el.disabled = live || busy;
+  $('settingsLocked').hidden = !(live || busy);
   $('liveBadge').classList.toggle('live', live);
   $('liveText').textContent = live ? 'AO VIVO' : 'OFFLINE';
   showMessage(s.message, s.state === 'error' ? 'error' : live ? 'warn' : 'muted');
@@ -421,7 +436,7 @@ function renderLink(s) {
 // "Salas": criar uma sala (todos podem compartilhar) ou entrar na de um amigo.
 // No servidor, a diferença entre as duas é só se os convidados podem compartilhar a tela.
 
-let view = 'broadcast';   // 'broadcast' | 'rooms'
+let view = 'broadcast';   // 'broadcast' | 'rooms' | 'settings'
 let roomDownSince = 0;     // desde quando a sala do amigo está sem conexão
 let lobbyKey = '';        // o que os cards da lista de salas estão mostrando
 let showList = false;     // na área de salas, ver a lista mesmo estando numa sala (ela continua aberta)
@@ -441,23 +456,27 @@ const inOwnRoom = () => !!lastStatus?.allowShare && !joined;
 
 function renderView() {
   const own = inOwnRoom();
-  if ((joined || own) && view !== 'rooms') view = 'rooms';   // quem está numa sala está na área de salas
+  if ((joined || own) && view === 'broadcast') view = 'rooms';   // quem está numa sala está na área de salas
+  const settings = view === 'settings';
   const lobby = view === 'rooms' && (showList || (!joined && !own));
 
   $('navBroadcast').classList.toggle('active', view === 'broadcast');
   $('navRooms').classList.toggle('active', view === 'rooms');
+  $('navSettings').classList.toggle('active', settings);
+  $('settingsPage').hidden = !settings;
   $('lobby').hidden = !lobby;
   $('pageHeader').hidden = lobby;   // a lista de salas não tem título: o menu já diz onde você está
-  $('workspace').hidden = lobby;
-  document.body.classList.toggle('no-side', lobby);
+  $('workspace').hidden = lobby || settings;
+  document.body.classList.toggle('no-side', lobby || settings);
   $('liveBadge').hidden = lobby;
 
-  $('pageTitle').textContent = view === 'broadcast' ? 'Transmissão'
+  $('pageTitle').textContent = settings ? 'Configurações'
+    : view === 'broadcast' ? 'Transmissão'
     : lobby ? 'Salas'
     : joined ? `Sala de ${joined.hostName || 'um amigo'}`
     : (activeRoom()?.name || 'Minha sala');
-  $('backToRoomsBtn').hidden = lobby || !(joined || own);
-  $('roomActionBtn').hidden = lobby || !(joined || own);
+  $('backToRoomsBtn').hidden = lobby || settings || !(joined || own);
+  $('roomActionBtn').hidden = lobby || settings || !(joined || own);
   setButton($('roomActionBtn'), 'leave', joined ? 'Sair da sala' : 'Encerrar sala');
 
   // Painel lateral: código e link (transmissão ou sala própria) ou o aviso de convidado.
@@ -503,6 +522,7 @@ function renderView() {
 }
 
 $('navRooms').onclick = () => { view = 'rooms'; showList = false; renderView(); };
+$('navSettings').onclick = () => { view = 'settings'; renderView(); loadAppSettings(); };
 $('backToRoomsBtn').onclick = () => { showList = true; renderView(); };
 $('navBroadcast').onclick = async () => {
   if (joined) {

@@ -28,6 +28,7 @@
   body.nav-collapsed .nav-btn { justify-content: center; padding: 10px 0; }
   body.nav-collapsed .nav-btn.active::before { left: -8px; }
   body.nav-collapsed #navToggle { align-self: center; }
+  #navSettings { margin-bottom: 10px; }
   nav .name-field { display: flex; flex-direction: column; gap: 5px; padding: 10px 4px 0; border-top: 1px solid var(--border); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
   nav .name-field input { width: 100%; font-size: 13px; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--text); }
 
@@ -76,11 +77,24 @@
   .source-btn small { color: var(--muted); font-size: 12px; font-weight: 400; }
 
   /* Predefinição, botão, resumo e "Ver log" numa linha só: o resumo corta com "…" se faltar espaço. */
-  .preset-row { border-top: 1px solid var(--border); padding-top: 10px; }
-  .preset-row > * { flex: none; }
-  .preset-row select { flex: 0 1 215px; min-width: 120px; }
-  #advancedBtn.active { border-color: var(--accent); color: var(--text); }
-  #advancedSummary { flex: 1 1 0; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; padding-left: 4px; }
+  /* ---------- Configurações ---------- */
+  .settings-page { display: flex; flex-direction: column; gap: 14px; max-width: 1040px; width: 100%; }
+  .set-card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
+  .set-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 4px; }
+  .set-head h2 { margin: 0; font-size: 14px; font-weight: 600; }
+  #advancedSummary { font-size: 12.5px; }
+  .set-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 11px 0; border-bottom: 1px solid var(--border); }
+  .set-card > .set-row:last-of-type { border-bottom: 0; }
+  label.set-row { cursor: pointer; }
+  .set-row select { width: 240px; }
+  .set-card .settings { margin-top: 14px; }
+  .set-card fieldset { background: var(--panel-2); }
+  .locked-note { margin-top: 10px; font-size: 12.5px; color: var(--warn); }
+  /* Chave liga/desliga */
+  input.switch { appearance: none; flex: none; width: 38px; height: 22px; margin: 0; border-radius: 999px; background: var(--panel-3); border: 1px solid var(--border-strong); position: relative; cursor: pointer; transition: background .15s, border-color .15s; }
+  input.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #c9cdd8; transition: left .15s, background .15s; }
+  input.switch:checked { background: var(--accent); border-color: var(--accent); }
+  input.switch:checked::after { left: 18px; background: #fff; }
 
   .settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
   fieldset { border: 1px solid var(--border); border-radius: 12px; background: var(--panel); padding: 12px 14px 14px; margin: 0; min-width: 0; }
@@ -188,7 +202,6 @@
     .field { margin-top: 6px; }
     fieldset { padding: 9px 12px 11px; }
     .dock { padding: 8px; gap: 8px; }
-    .preset-row { padding-top: 8px; }
     .source-btn, #startBtn, #stopBtn { height: 42px; }
     .source-btn img, .source-btn .src-icon { width: 56px; height: 32px; }
   }
@@ -213,7 +226,7 @@
     main { overflow: visible; }
     .preview { flex: none !important; height: 52vh; min-height: 240px; }
     aside { border-left: 0; border-top: 1px solid var(--border); overflow: visible; }
-    .preset-row { flex-wrap: wrap; }
+    .set-row select { width: 180px; }
   }
 </style>
 </head>
@@ -223,6 +236,7 @@
   <button id="navBroadcast" class="nav-btn active" data-icon="radio" title="Transmitir a sua tela (só você transmite)"><span class="label">Transmissão</span></button>
   <button id="navRooms" class="nav-btn" data-icon="users" title="Salas onde todos podem compartilhar a tela"><span class="label">Salas</span></button>
   <div class="grow"></div>
+  <button id="navSettings" class="nav-btn" data-icon="settings" title="Configurações"><span class="label">Configurações</span></button>
   <label class="name-field">Seu nome
     <input type="text" id="myName" maxlength="24" placeholder="Como aparecer" autocomplete="off">
   </label>
@@ -287,22 +301,30 @@
   </div>
   <div id="message" class="muted" hidden></div>
 
-  <div class="row preset-row">
-    <select id="profilePreset" title="Predefinição de qualidade">
-      <option value="recommended">Recomendado</option>
-      <option value="quality">Qualidade · 1080p 60</option>
-      <option value="balanced">Equilibrado · 900p 60</option>
-      <option value="cpu">CPU · 720p 30 (x264)</option>
-      <option value="light">Internet fraca · 540p 30</option>
-      <option value="">Personalizado</option>
-    </select>
-    <button id="advancedBtn" data-icon="sliders" title="Abrir ou fechar as configurações de vídeo, codificação e áudio" aria-expanded="false">Configurações avançadas</button>
-    <span class="muted" id="advancedSummary"></span>
-    <button id="logBtn" class="ghost icon-btn" data-icon="file" title="Ver log (detalhes técnicos, útil para relatar um problema)"></button>
-  </div>
   </div>
 
-  <div id="advanced" hidden>
+  </div>
+
+  <!-- Configurações: qualidade da transmissão e opções do app -->
+  <div id="settingsPage" class="settings-page" hidden>
+    <section class="set-card">
+      <div class="set-head">
+        <h2>Qualidade da transmissão</h2>
+        <span class="muted" id="advancedSummary"></span>
+      </div>
+      <div class="set-row">
+        <span>Predefinição</span>
+        <select id="profilePreset" title="Ajusta todas as opções abaixo de uma vez">
+          <option value="recommended">Recomendado · 720p 30</option>
+          <option value="quality">Qualidade · 1080p 60</option>
+          <option value="balanced">Equilibrado · 900p 60</option>
+          <option value="cpu">CPU · 720p 30 (x264)</option>
+          <option value="light">Internet fraca · 540p 30</option>
+          <option value="">Personalizado</option>
+        </select>
+      </div>
+      <div id="settingsLocked" class="locked-note" hidden>Pare a transmissão para mudar a qualidade.</div>
+      <div id="advanced">
   <div class="settings">
     <fieldset>
       <legend>Vídeo</legend>
@@ -409,7 +431,16 @@
       </div>
     </fieldset>
   </div>
-  </div>
+      </div>
+    </section>
+
+    <section class="set-card">
+      <div class="set-head"><h2>Aplicativo</h2></div>
+      <label class="set-row"><span>Fechar a janela deixa o app na bandeja</span><input type="checkbox" id="optTray" class="switch"></label>
+      <label class="set-row"><span>Iniciar com o Windows</span><input type="checkbox" id="optAutostart" class="switch"></label>
+      <div class="set-row"><span>Log técnico</span><button id="logBtn" data-icon="file" title="Detalhes técnicos, úteis para relatar um problema">Abrir log</button></div>
+      <div id="appSettingsError" class="locked-note" hidden></div>
+    </section>
   </div>
 </main>
 

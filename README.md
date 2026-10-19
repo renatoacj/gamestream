@@ -27,7 +27,8 @@
 - **Captura de uma janela ou de um monitor** com o Windows Graphics Capture (via FFmpeg `gfxcapture`). A captura e a mudança de resolução acontecem na GPU.
 - **Vídeo H.264 com baixa latência**, codificado por NVIDIA NVENC, AMD AMF, Intel Quick Sync ou CPU (x264). O app detecta o que o PC tem e, se o escolhido falhar, usa outro e avisa.
 - **Áudio só da janela escolhida** (process loopback do Windows) ou de todo o PC, em Opus estéreo.
-- **Configurações no estilo OBS**: resolução de saída, FPS constante, CBR/VBR, bitrate, preset, intervalo de quadro-chave, perfil H.264 e bitrate do áudio, além de predefinições prontas.
+- **Configurações no estilo OBS**: resolução de saída, FPS constante, CBR/VBR, bitrate, preset, intervalo de quadro-chave, perfil H.264 e bitrate do áudio, além de predefinições prontas (tudo em **Configurações**).
+- **Bandeja do sistema**: fechar a janela deixa o app rodando perto do relógio (dá para desligar), e ele pode iniciar com o Windows.
 - **Não depende de P2P**: tudo passa pelo link HTTPS, então funciona em qualquer rede (4G, redes com NAT, etc.).
 - **Um amigo com internet lenta não atrasa os outros**: cada um tem sua fila, e quem atrasa pula para o quadro-chave mais recente.
 - **Economia de upload**: cada pessoa só recebe o vídeo da tela que expandiu.
@@ -55,7 +56,7 @@ powershell -ExecutionPolicy Bypass -File tools/build-installer.ps1
 **Transmitir (só você transmite)**
 
 1. Abra o **GameStream**. Na primeira vez ele baixa o `cloudflared` e o FFmpeg oficiais (~200 MB).
-2. Na tela **Transmissão**, escolha a **janela do jogo**. A predefinição **Recomendado** (720p, 30 fps) já vem escolhida; as outras opções ficam em **Configurações avançadas**.
+2. Na tela **Transmissão**, escolha a **janela do jogo**. A predefinição **Recomendado** (720p, 30 fps) já vem escolhida; as outras opções ficam em **Configurações**, no menu à esquerda.
 3. Clique em **Iniciar transmissão**.
 4. Mande para os amigos o **código** (para quem tem o GameStream) ou o **link** (para abrir no navegador). Os dois ficam na lateral.
 

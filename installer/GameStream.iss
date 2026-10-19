@@ -64,6 +64,10 @@ Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags
 ; Garante que nada do app ficou rodando (túnel/captura).
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /T /IM {#AppExe}"; Flags: runhidden; RunOnceId: "KillApp"
 
+[Registry]
+; "Iniciar com o Windows" (ligado nas Configurações do app): a entrada sai junto na desinstalação.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "GameStream"; Flags: uninsdeletevalue dontcreatekey
+
 [UninstallDelete]
 ; FFmpeg, cloudflared e dados do WebView2 baixados pelo app.
 Type: filesandordirs; Name: "{localappdata}\GameStream"

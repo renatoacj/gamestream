@@ -422,6 +422,29 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
             return Results.Ok();
         });
 
+        // Preferências do app: fechar para a bandeja e iniciar com o Windows.
+        app.MapGet("/api/app-settings", (HttpContext ctx) =>
+            IsHost(ctx)
+                ? Results.Json(new { closeToTray = AppSettings.Current.CloseToTray, startWithWindows = AppSettings.StartWithWindows })
+                : Results.Unauthorized());
+
+        app.MapPost("/api/app-settings", async (HttpContext ctx) =>
+        {
+            if (!IsHost(ctx)) return Results.Unauthorized();
+            var body = await ctx.Request.ReadFromJsonAsync<JsonObject>();
+            if (body?["closeToTray"]?.GetValue<bool>() is { } tray)
+            {
+                AppSettings.Current.CloseToTray = tray;
+                AppSettings.Current.Save();
+            }
+            if (body?["startWithWindows"]?.GetValue<bool>() is { } autostart)
+            {
+                try { AppSettings.StartWithWindows = autostart; }
+                catch (Exception ex) { return Results.Json(new { error = "Não foi possível mudar a inicialização: " + ex.Message }, statusCode: 500); }
+            }
+            return Results.Ok();
+        });
+
         app.MapPost("/api/open-log", (HttpContext ctx) =>
         {
             if (!IsHost(ctx)) return Results.Unauthorized();
