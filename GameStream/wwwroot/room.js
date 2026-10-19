@@ -101,11 +101,18 @@ function connect() {
       setTimeout(connect, 10_000);
       return;
     }
-    if (everConnected) {
+    if (everConnected || lostAttempts > 0) {
+      // Já esteve na sala: insiste. Se não volta logo, provavelmente quem criou fechou o app (o link muda).
       failedAttempts = 0;
       everConnected = false;
-      showRoomMessage('Sem conexão com a sala', 'Tentando reconectar…');
-      setTimeout(connect, 2000);
+      lostAttempts++;
+      if (lostAttempts > 4) {
+        showRoomMessage('A sala não está respondendo',
+          'Se quem a criou fechou o GameStream ou a internet dele caiu, o link mudou: peça o novo. Continuamos tentando…');
+      } else {
+        showRoomMessage('Sem conexão com a sala', 'Tentando reconectar…');
+      }
+      setTimeout(connect, lostAttempts > 4 ? 10_000 : 2000);
       return;
     }
     // Nunca chegou a entrar: código/link errado ou sala fechada. Insistir rápido não ajuda
@@ -120,6 +127,7 @@ function connect() {
 
 let everConnected = false;   // recebeu o "hello" desta conexão
 let failedAttempts = 0;
+let lostAttempts = 0;        // tentativas seguidas de voltar depois de ter estado na sala
 
 function send(msg) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
@@ -131,6 +139,7 @@ function onControl(msg) {
       myId = msg.id;
       isHost = msg.host;
       everConnected = true;
+      lostAttempts = 0;
       roomMessage = null;
       break;
 

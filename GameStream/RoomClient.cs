@@ -47,6 +47,9 @@ public sealed partial class RoomClient : IRoomSink, IDisposable
 
     /// <summary>Nome de quem criou a sala (aparece no título e na lista de salas recentes).</summary>
     public string? HostName { get; private set; }
+    /// <summary>Por que não está conectado: "gone" (a sala saiu do ar), "closed" (fechada, vai reabrir) ou null.</summary>
+    public string? Reason { get; private set; }
+
     public string? Message { get; private set; }
 
     /// <summary>A sala recusou ou encerrou o nosso compartilhamento (motivo para mostrar ao usuário).</summary>
@@ -125,6 +128,7 @@ public sealed partial class RoomClient : IRoomSink, IDisposable
                 _connected = true;
                 State = "connected";
                 Message = null;
+                Reason = null;
                 SendText(new JsonObject { ["type"] = "hello", ["name"] = _name });
                 if (_config is { } config) SendPublish(config);
 
@@ -142,14 +146,26 @@ public sealed partial class RoomClient : IRoomSink, IDisposable
             catch (Exception ex)
             {
                 Tools.Log("Sala remota: " + ex.Message);
-                if (await KeyRejectedAsync(token))
+                var check = await CheckKeyAsync(token);
+                if (check == 401)
                 {
                     // A sala existe, mas recusou a chave: não adianta insistir (e tentativas erradas
                     // demais bloqueiam a entrada por código para todo mundo).
                     Message = "Código ou link incorreto. Confira com quem criou a sala (o código muda se ela gerar um novo).";
                     break;
                 }
-                Message = "Não foi possível conectar à sala. Confira o código e a internet. Tentando de novo…";
+                if (check is 530 or 502 or 404)
+                {
+                    // A Cloudflare não acha mais o túnel (erro 1033): quem criou a sala fechou o app ou a
+                    // conexão dele caiu, e o endereço mudou. Continua tentando caso tenha sido só um instante.
+                    Reason = "gone";
+                    Message = "Se quem a criou fechou o GameStream ou a internet dele caiu, o código mudou: peça o novo.";
+                }
+                else
+                {
+                    Reason = null;
+                    Message = "Não foi possível conectar à sala. Confira o código e a internet. Tentando de novo…";
+                }
             }
 
             _connected = false;
@@ -163,20 +179,20 @@ public sealed partial class RoomClient : IRoomSink, IDisposable
     }
 
     /// <summary>
-    /// A conexão falhou: pergunta à sala se a chave vale. Só retorna true quando a sala respondeu
-    /// claramente "não" (401); sem resposta (sala fechada, sem internet) continua tentando.
+    /// A conexão falhou: pergunta à sala se a chave vale. Retorna o código HTTP da resposta
+    /// (401 = chave errada; 423 = sala fechada; 530 = o túnel não existe mais) ou null sem resposta.
     /// </summary>
-    private async Task<bool> KeyRejectedAsync(CancellationToken token)
+    private async Task<int?> CheckKeyAsync(CancellationToken token)
     {
         try
         {
             using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(10) };
             using var res = await http.GetAsync(_checkUrl, token);
-            return res.StatusCode == System.Net.HttpStatusCode.Unauthorized;
+            return (int)res.StatusCode;
         }
         catch
         {
-            return false;
+            return null;
         }
     }
 
@@ -235,7 +251,8 @@ public sealed partial class RoomClient : IRoomSink, IDisposable
                     Message = "A sala está cheia. Tentando entrar de novo…";
                     return false;
                 case "closed":
-                    Message = "A sala está fechada. Quando quem a criou abrir de novo, você entra sozinho.";
+                    Reason = "closed";
+                    Message = "Quando quem a criou abrir de novo, você entra sozinho.";
                     return false;
                 case "expired":
                     Message = "Este código não vale mais: quem criou a sala gerou um novo.";

@@ -36,6 +36,7 @@ public static class Thumbnails
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
             })!;
+            ChildProcesses.Track(p);
             _ = p.StandardError.ReadToEndAsync();
             using var ms = new MemoryStream();
             var copy = p.StandardOutput.BaseStream.CopyToAsync(ms);
