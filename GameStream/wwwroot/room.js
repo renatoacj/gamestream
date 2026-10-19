@@ -886,11 +886,34 @@ function toggleFullscreen() {
 }
 $('fullscreen').onclick = toggleFullscreen;
 
+// Controles sobre o vídeo: aparecem quando o mouse mexe e somem depois de alguns segundos parado
+// (o cursor também some). Enquanto o mouse está em cima de um controle, eles ficam.
+let controlsTimer = null;
+function showControls() {
+  const stage = $('stage');
+  stage.classList.add('controls');
+  stage.classList.remove('idle');
+  clearTimeout(controlsTimer);
+  controlsTimer = setTimeout(() => {
+    if (stage.querySelector('.stage-top:hover, .stage-bottom:hover, .pane-top:hover')) return showControls();
+    stage.classList.remove('controls');
+    stage.classList.add('idle');
+  }, 2500);
+}
+$('stage').addEventListener('pointermove', showControls);
+$('stage').addEventListener('pointerdown', showControls);
+$('stage').addEventListener('pointerleave', () => {
+  if (document.fullscreenElement) return;
+  clearTimeout(controlsTimer);
+  $('stage').classList.remove('controls', 'idle');
+});
+
 // Em tela cheia só a área do vídeo aparece: o som e o volume vão junto, para o canto da tela.
 document.addEventListener('fullscreenchange', () => {
   const full = document.fullscreenElement === $('stage');
-  if (full) $('stageTop').append($('soundControls'));
+  if (full) $('stageBottom').append($('soundControls'));
   else document.querySelector('footer.bar').append($('soundControls'));
+  showControls();
   setLabel($('fullscreen'), 'maximize', full ? 'Sair da tela cheia' : 'Tela cheia');
 });
 
