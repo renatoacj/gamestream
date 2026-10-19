@@ -210,6 +210,8 @@ $('picker').addEventListener('click', (e) => { if (e.target === $('picker')) $('
 // ---------- Medidor de áudio ----------
 
 async function updateMeter() {
+  // O medidor só aparece em Configurações: fora dela (ou com a janela escondida) não pergunta nada ao app.
+  if ($('settingsPage').hidden || document.hidden) return;
   let db = null;
   let autoGain = null;
   try {

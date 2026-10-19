@@ -132,12 +132,13 @@ public partial class MainWindow : Window
             _server.Broadcaster = _broadcaster;
             _ = _broadcaster.PrepareAsync();
 
-            // A sala (vídeo e som das telas dos outros) roda dentro do WebView2. Enquanto a pessoa joga, a janela
-            // do app fica atrás do jogo ou minimizada, e por padrão o Chromium trata isso como "aba em segundo
-            // plano": reduz a prioridade da página e o som fica picotado. Estas opções desligam essa economia.
+            // A economia de segundo plano do Chromium fica LIGADA: com o app atrás do jogo ou minimizado, a página
+            // para de desenhar e não disputa a placa de vídeo com o jogo e a captura (desligá-la, como na 0.3.0,
+            // fazia a transmissão travar durante o jogo). O som da sala é tocado pelo próprio app
+            // (RoomAudioPlayer), então não depende da página estar em primeiro plano.
             var browserArgs = new List<string> { "--autoplay-policy=no-user-gesture-required" };
-            // GAMESTREAM_NO_BG_FIX=1 mantém a economia ligada (só para comparar o antes e o depois em testes).
-            if (Environment.GetEnvironmentVariable("GAMESTREAM_NO_BG_FIX") != "1")
+            // GAMESTREAM_BG_ALWAYS=1 desliga a economia (só para comparar em testes).
+            if (Environment.GetEnvironmentVariable("GAMESTREAM_BG_ALWAYS") == "1")
             {
                 browserArgs.AddRange([
                     "--disable-background-timer-throttling",
