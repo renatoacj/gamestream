@@ -31,6 +31,7 @@ public partial class App : Application
         }
 #endif
 
+        ProcessTuning.TuneSelf();
         var window = new MainWindow(startHidden: startup);
         MainWindow = window;
         if (_showRequest != null)

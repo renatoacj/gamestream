@@ -201,6 +201,7 @@ public sealed class VideoCapture : IDisposable
         };
         var process = Process.Start(psi)!;
         ChildProcesses.Track(process);
+        ProcessTuning.TuneCapture(process);
         var stderr = new StringBuilder();
         process.ErrorDataReceived += (_, e) => { if (e.Data != null) lock (stderr) stderr.AppendLine(e.Data); };
         process.BeginErrorReadLine();
