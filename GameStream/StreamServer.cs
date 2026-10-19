@@ -309,6 +309,7 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
                 {
                     state = Joined.State,
                     message = Joined.Message,
+                    reason = Joined.Reason,
                     roomUrl = Joined.RoomPageUrl,
                     origin = Joined.Origin,
                     hostName = Joined.HostName,

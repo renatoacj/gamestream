@@ -422,6 +422,7 @@ function renderLink(s) {
 // No servidor, a diferença entre as duas é só se os convidados podem compartilhar a tela.
 
 let view = 'broadcast';   // 'broadcast' | 'rooms'
+let roomDownSince = 0;     // desde quando a sala do amigo está sem conexão
 let lobbyKey = '';        // o que os cards da lista de salas estão mostrando
 let showList = false;     // na área de salas, ver a lista mesmo estando numa sala (ela continua aberta)
 let lastStatus = null;
@@ -469,15 +470,26 @@ function renderView() {
   $('guestStreamsRow').hidden = !own;
   $('myName').disabled = !!joined;   // o nome vai junto ao entrar; para mudar, saia e entre de novo
 
-  const box = $('joinMessage');
-  if (joined) {
-    const connected = joined.state === 'connected';
-    box.hidden = connected && !joined.message;
-    box.className = 'error';
-    box.textContent = joined.message || 'Conectando à sala…';
+  // Sala do amigo fora do ar ou fechada: mostra um aviso no lugar da sala (senão aparece a página
+  // de erro da Cloudflare dentro do quadro). Quando ela volta, recarrega a sala.
+  $('joinMessage').hidden = true;
+  const down = !!joined && joined.state !== 'connected';
+  if (down) {
+    if (!roomDownSince) roomDownSince = Date.now();
+    const gone = joined.reason === 'gone';
+    const fatal = joined.state === 'closed';
+    $('roomDownTitle').textContent = gone ? 'Esta sala não está no ar'
+      : joined.reason === 'closed' ? 'A sala está fechada'
+      : fatal ? 'Não foi possível entrar na sala'
+      : 'Conectando à sala…';
+    $('roomDownText').textContent = joined.message || '';
+    $('roomDownNew').hidden = !(gone || fatal);
   } else {
-    box.hidden = true;
+    if (roomDownSince && Date.now() - roomDownSince > 4000 && joined) $('room').src = roomSrc;
+    roomDownSince = 0;
   }
+  $('roomDown').hidden = !down;
+  $('room').style.visibility = down ? 'hidden' : '';
   if (lobby) {
     const key = JSON.stringify([myRooms(), recentRooms(), activeRoom()?.id, !!joined]);
     if (key !== lobbyKey) {
@@ -681,6 +693,14 @@ async function leaveRoom() {
 }
 
 $('joinBtn').onclick = () => joinRoom();
+$('roomDownLeave').onclick = () => leaveRoom();
+$('roomDownNew').onclick = async () => {
+  await leaveRoom();
+  view = 'rooms';
+  showList = true;
+  renderView();
+  $('joinUrl').focus();
+};
 $('joinUrl').onkeydown = (e) => { if (e.key === 'Enter') joinRoom(); };
 
 // ---------- Salas recentes ----------

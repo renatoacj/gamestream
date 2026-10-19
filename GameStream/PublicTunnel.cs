@@ -103,6 +103,7 @@ public sealed partial class PublicTunnel : IDisposable
 
         using var process = Process.Start(psi) ?? throw new InvalidOperationException("não foi possível iniciar o cloudflared");
         _process = process;
+        ChildProcesses.Track(process);
         using var _ = token.Register(() => { try { process.Kill(); } catch { } });
 
         // O cloudflared escreve o endereço do túnel no stderr.

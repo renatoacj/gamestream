@@ -88,6 +88,7 @@ public sealed class VideoCapture : IDisposable
             RedirectStandardError = true,
             RedirectStandardOutput = true,
         })!;
+        ChildProcesses.Track(p);
         var err = p.StandardError.ReadToEndAsync();
         _ = p.StandardOutput.ReadToEndAsync();
         using var cts = new CancellationTokenSource(timeout);
@@ -199,6 +200,7 @@ public sealed class VideoCapture : IDisposable
             RedirectStandardInput = true,
         };
         var process = Process.Start(psi)!;
+        ChildProcesses.Track(process);
         var stderr = new StringBuilder();
         process.ErrorDataReceived += (_, e) => { if (e.Data != null) lock (stderr) stderr.AppendLine(e.Data); };
         process.BeginErrorReadLine();

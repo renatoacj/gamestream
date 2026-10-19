@@ -49,6 +49,13 @@
     border-radius: 12px; overflow: hidden; position: relative;
   }
   .preview iframe { width: 100%; height: 100%; border: 0; display: block; }
+  .room-down { position: absolute; inset: 0; display: grid; place-items: center; background: var(--bg); text-align: center; padding: 24px; }
+  .room-down > div { max-width: 440px; }
+  .room-down-icon { width: 52px; height: 52px; margin: 0 auto 14px; border-radius: 14px; display: grid; place-items: center; background: var(--panel-2); color: var(--muted); }
+  .room-down-icon .icon { width: 24px; height: 24px; }
+  .room-down h2 { margin: 0 0 6px; font-size: 17px; font-weight: 600; }
+  .room-down p { margin: 0; color: var(--muted); }
+  .room-down .actions { display: flex; gap: 8px; justify-content: center; margin-top: 18px; flex-wrap: wrap; }
 
   /* Controles de captura: fonte + iniciar, e a predefinição logo abaixo */
   .dock { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
@@ -254,6 +261,18 @@
   <div id="workspace">
   <div class="preview">
     <iframe id="room" title="Sala" allow="fullscreen"></iframe>
+    <!-- No lugar da sala quando não dá para conectar (em vez da página de erro da Cloudflare) -->
+    <div id="roomDown" class="room-down" hidden>
+      <div>
+        <div class="room-down-icon" data-icon="radio"></div>
+        <h2 id="roomDownTitle"></h2>
+        <p id="roomDownText"></p>
+        <div class="actions">
+          <button id="roomDownNew" class="primary" data-icon="enter">Entrar com código novo</button>
+          <button id="roomDownLeave" data-icon="leave">Sair da sala</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div class="dock">
