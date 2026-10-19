@@ -15,6 +15,12 @@ const HOST_TOKEN = params.get('t') || '';
 const IN_APP = params.get('app') === '1';
 const MY_DEVICE = params.get('dev') || '';
 const NAME_FROM_APP = (params.get('name') || '').trim().slice(0, 24);
+// Sala de um amigo aberta no app: a página é a deste app (mesma versão, som tocado pelo app) e só os dados
+// vêm do servidor do amigo, pelo túnel. Só endereços de túnel da Cloudflare são aceitos.
+const REMOTE = (() => {
+  const r = params.get('remote') || '';
+  return IN_APP && /^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/.test(r) ? r : '';
+})();
 if (EMBEDDED || IN_APP) document.body.classList.add('embedded');
 // Dentro do app, o som é tocado pelo próprio GameStream.exe (ver RoomAudioPlayer.cs): o WebView2 toca áudio
 // num processo dele, que programas de mixagem por aplicativo (MixLine, Voicemeeter) não reconhecem como o app.
@@ -77,10 +83,11 @@ $('nameInput').onkeydown = (e) => { if (e.key === 'Enter') $('nameOk').click(); 
 // ---------- Conexão ----------
 
 function connect() {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const proto = REMOTE || location.protocol === 'https:' ? 'wss' : 'ws';
+  const server = REMOTE ? REMOTE.slice('https://'.length) : location.host;
   const auth = EMBEDDED ? `role=host&t=${encodeURIComponent(HOST_TOKEN)}` : `role=viewer&k=${encodeURIComponent(VIEW_KEY)}`;
   const dev = MY_DEVICE ? `&dev=${encodeURIComponent(MY_DEVICE)}` : '';
-  ws = new WebSocket(`${proto}://${location.host}/ws?${auth}${dev}`);
+  ws = new WebSocket(`${proto}://${server}/ws?${auth}${dev}`);
   ws.binaryType = 'arraybuffer';
   ws.onopen = () => send({ type: 'hello', name: storedName() || (EMBEDDED ? 'Anfitrião' : 'Convidado') });
   ws.onmessage = (e) => {
