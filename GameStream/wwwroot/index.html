@@ -64,19 +64,28 @@
     position: absolute; top: 12px; left: 12px; right: 12px; display: flex; gap: 8px; align-items: center;
     opacity: 0; transition: opacity .2s; pointer-events: none;
   }
-  .stage:hover .stage-top, .stage-top:focus-within { opacity: 1; }
-  .stage-top > * { pointer-events: auto; }
+  /* Controles sobre o vídeo, como num reprodutor: aparecem quando o mouse mexe e somem (com o cursor)
+     depois de alguns segundos parado. */
+  .stage-bottom {
+    position: absolute; left: 0; right: 0; bottom: 0; padding: 48px 16px 14px; display: flex; justify-content: flex-end;
+    background: linear-gradient(transparent, rgba(0, 0, 0, .78)); opacity: 0; transition: opacity .25s; pointer-events: none;
+  }
+  .stage.controls .stage-top, .stage.controls .stage-bottom, .stage-top:focus-within, .stage-bottom:focus-within { opacity: 1; }
+  .stage.controls .stage-top > *, .stage.controls .stage-bottom > * { pointer-events: auto; }
+  .stage.idle, .stage.idle * { cursor: none; }
+  .stage.idle .pane-top { opacity: 0; }
   .stage-top button, .stage-top .label { background: rgba(15, 17, 21, .8); backdrop-filter: blur(6px); }
   .stage-top .label { padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border); font-weight: 600; }
   .sound-controls { display: flex; align-items: center; gap: 8px; }
   .sound-controls label { display: flex; align-items: center; gap: 6px; }
   .sound-controls input[type=range] { width: 110px; accent-color: var(--accent); }
   /* Em tela cheia: o grupo de som fica no canto superior direito, sobre o vídeo */
-  .stage-top .sound-controls {
-    margin-left: auto; padding: 4px 6px 4px 10px; border-radius: 10px; border: 1px solid var(--border);
-    background: rgba(15, 17, 21, .8); backdrop-filter: blur(6px);
-  }
-  .stage-top .sound-controls button { background: transparent; }
+  .stage-bottom .sound-controls button { background: rgba(15, 17, 21, .6); border-color: rgba(255, 255, 255, .15); }
+  .stage-bottom .sound-controls input[type=range] { width: 140px; }
+  .stage-bottom:empty { display: none; }   /* fora da tela cheia os controles ficam na barra de baixo */
+  .stage-bottom .sound-controls { flex-wrap: wrap; justify-content: flex-end; }
+  .stage:has(.stage-bottom .sound-controls) #unmute { bottom: 84px; }
+  .stage-bottom #volumeLabel { color: #fff; }
   #unmute {
     position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
     background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600;
@@ -205,6 +214,7 @@
     <div class="stage-top" id="stageTop">
       <button id="backBtn" data-icon="arrow-left" title="Voltar para a lista de telas">Todas as telas</button>
     </div>
+    <div class="stage-bottom" id="stageBottom"></div>
     <button id="unmute" data-icon="volume" hidden>Clique para ativar o som</button>
   </section>
 
