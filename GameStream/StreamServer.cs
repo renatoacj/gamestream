@@ -91,7 +91,17 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
     /// É o próprio endereço da sala em formato mais fácil de passar; não depende de nenhum serviço.
     /// </summary>
     public string? RoomCode =>
-        Tunnel?.Url is { } url && RoomClient.TunnelName(url) is { } name ? $"{name}-{RoomPin}" : null;
+        AllowGuestShare && CurrentRoomGuid is { } guid ? RoomIds.Code(RoomName, guid)   // sala salva: código fixo
+        : Tunnel?.Url is { } url && RoomClient.TunnelName(url) is { } name ? $"{name}-{RoomPin}" : null;
+
+    /// <summary>GUID da sala salva aberta agora (código fixo), ou null na transmissão.</summary>
+    public string? CurrentRoomGuid { get; private set; }
+
+    /// <summary>Chaves das salas salvas deste PC: quem chega com uma delas enquanto a sala está fechada espera.</summary>
+    private string[] _savedRoomKeys = [];
+
+    /// <summary>Publica o endereço atual das salas salvas, para o código fixo continuar valendo.</summary>
+    private readonly RoomDirectory _directory;
 
     private const int MaxWrongPins = 30;                        // tentativas erradas toleradas…
     private static readonly TimeSpan PinWindow = TimeSpan.FromMinutes(5);   // …neste intervalo, antes de bloquear
@@ -136,6 +146,10 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
             {
                 if (KeyMatches(provided, key) || (isPin && KeyMatches(provided, pin))) return KeyCheck.Closed;
             }
+            foreach (var key in _savedRoomKeys)
+            {
+                if (KeyMatches(provided, key)) return KeyCheck.Closed;
+            }
             if (isPin && ++_wrongPins >= MaxWrongPins)
             {
                 // Alguém está chutando: a entrada por código para por um tempo (o link continua valendo).
@@ -152,20 +166,22 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
     /// transmissão). As anteriores ficam guardadas como "fechadas": quem estava conectado espera e volta sozinho
     /// quando elas forem usadas de novo.
     /// </summary>
-    private void SetViewKey(string key, string pin)
+    /// <param name="keepOld">false = a chave anterior deixa de valer de vez ("código novo"): quem estava sai.</param>
+    private void SetViewKey(string key, string pin, bool keepOld = true)
     {
         if (key == ViewKey && pin == RoomPin) return;
         lock (_pinLock)
         {
             _closedKeys.RemoveAll(k => k.Key == ViewKey || k.Key == key);
-            _closedKeys.Add((ViewKey, RoomPin));
+            if (keepOld) _closedKeys.Add((ViewKey, RoomPin));
             if (_closedKeys.Count > MaxClosedKeys) _closedKeys.RemoveAt(0);
             ViewKey = key;
             RoomPin = pin;
         }
+        var notice = keepOld ? """{"type":"closed"}""" : """{"type":"expired"}""";
         foreach (var p in _people.Values.Where(p => !p.IsHost))
         {
-            p.EnqueueText("""{"type":"closed"}""");
+            p.EnqueueText(notice);
             _ = Task.Delay(500).ContinueWith(_ => p.Abort());
         }
     }
@@ -189,6 +205,7 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
     {
         _port = port;
         _webRoot = webRoot;
+        _directory = new RoomDirectory(() => Tunnel?.Url);
     }
 
     /// <summary>Tenta a porta preferida e as seguintes, caso já estejam em uso.</summary>
@@ -327,6 +344,8 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
 
             if (RoomCode != null && string.Equals(link.Trim(), RoomCode, StringComparison.OrdinalIgnoreCase))
                 return Results.Json(new { error = "Esse é o código da sua própria sala." }, statusCode: 400);
+            if (RoomIds.GuidFromCode(link) is { } ownGuid && _savedRoomKeys.Contains(RoomIds.ViewKey(ownGuid)))
+                return Results.Json(new { error = "Esse é o código de uma sala sua: abra-a em Minhas salas." }, statusCode: 400);
 
             var client = RoomClient.TryCreate(link, name, out var error);
             if (client == null) return Results.Json(new { error }, statusCode: 400);
@@ -398,6 +417,18 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
             return Results.Ok();
         });
 
+        // As salas salvas deste PC (GUIDs): o endereço delas é publicado, e quem chega enquanto estão fechadas espera.
+        app.MapPost("/api/rooms", async (HttpContext ctx) =>
+        {
+            if (!IsHost(ctx)) return Results.Unauthorized();
+            var body = await ctx.Request.ReadFromJsonAsync<JsonObject>();
+            var guids = (body?["rooms"] as JsonArray)?.Select(n => n?.GetValue<string>()).OfType<string>()
+                .Where(RoomIds.IsGuid).Distinct().Take(50).ToArray() ?? [];
+            _savedRoomKeys = guids.Select(RoomIds.ViewKey).ToArray();
+            _directory.SetRooms(guids);
+            return Results.Ok();
+        });
+
         app.MapPost("/api/max-viewers", (HttpContext ctx) =>
         {
             if (!IsHost(ctx)) return Results.Unauthorized();
@@ -410,13 +441,23 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
         {
             if (!IsHost(ctx)) return Results.Unauthorized();
             // Opcional: a chave da sala salva que está sendo aberta (ou a da transmissão, ao voltar para ela).
+            // Sala salva: room=<guid> (a chave sai do GUID, e o código fica fixo); fresh=1 = código novo.
             var key = ctx.Request.Query["key"].ToString();
             var pin = ctx.Request.Query["pin"].ToString();
-            if (key != "" || pin != "")
+            var room = ctx.Request.Query["room"].ToString();
+            if (room != "")
+            {
+                if (!RoomIds.IsGuid(room)) return Results.BadRequest();
+                SetViewKey(RoomIds.ViewKey(room), RoomIds.Pin(room), keepOld: ctx.Request.Query["fresh"] != "1");
+                CurrentRoomGuid = room;
+            }
+            else if (key != "" || pin != "")
             {
                 if (!ViewKeyPattern().IsMatch(key) || !PinPattern().IsMatch(pin)) return Results.BadRequest();
                 SetViewKey(key, pin);
+                CurrentRoomGuid = null;
             }
+            if (ctx.Request.Query["on"] != "1") CurrentRoomGuid = null;
             RoomName = CleanRoomName(ctx.Request.Query["name"]);
             SetAllowGuestShare(ctx.Request.Query["on"] == "1");
             return Results.Ok();
@@ -864,6 +905,7 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
 
     public async ValueTask DisposeAsync()
     {
+        _directory.Dispose();
         if (_app != null)
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));

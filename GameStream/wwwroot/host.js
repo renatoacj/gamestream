@@ -386,7 +386,7 @@ async function refresh() {
   joined = s.joined;
   lastStatus = s;
   if (joined?.hostName && joinedWith) rememberRoom(joinedWith, joined.hostName);   // dá nome à sala na lista de recentes
-  const wanted = joined ? joined.roomUrl : s.roomUrl + (myName() ? `&name=${encodeURIComponent(myName())}` : '');
+  const wanted = joined ? joined.roomUrl || 'about:blank' : s.roomUrl + (myName() ? `&name=${encodeURIComponent(myName())}` : '');
   if (wanted !== roomSrc) {
     roomSrc = wanted;
     $('room').src = wanted;
@@ -567,7 +567,25 @@ function myRooms() {
 
 function storeMyRooms(list) {
   try { localStorage.setItem('gamestream-my-rooms', JSON.stringify(list.slice(0, 20))); } catch { /* sem armazenamento */ }
+  syncRooms();
 }
+
+// Cada sala salva tem um GUID: o código dela ("nome-<guid>") é fixo, mesmo fechando e abrindo o app.
+// O app avisa o servidor quais são, para publicar o endereço atual delas (ver RoomDirectory.cs).
+function syncRooms() {
+  fetch(api('rooms'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rooms: myRooms().map((r) => r.guid).filter(Boolean) }),
+  }).catch(() => {});
+}
+
+(function giveRoomsAGuid() {
+  // Salas criadas antes do código fixo ganham o seu GUID (e perdem a chave antiga, que mudava a cada abertura).
+  const list = myRooms();
+  if (list.every((r) => r.guid)) return;
+  storeMyRooms(list.map(({ key, pin, ...r }) => (r.guid ? r : { ...r, guid: crypto.randomUUID() })));
+})();
 
 let activeRoomId = null;   // sala salva que está aberta agora (enquanto o servidor estiver em modo sala)
 
@@ -581,28 +599,17 @@ function activeRoom() {
 // As palavras do começo do código vêm do endereço do túnel, que muda quando o app é fechado e aberto.
 let broadcastKey = null;   // { key, pin } da transmissão, para voltar a ela ao encerrar uma sala
 
-function randomHex(bytes) {
-  return [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, '0')).join('');
-}
-
-function randomPin() {
-  const max = 4_000_000_000;   // múltiplo de 1.000.000 abaixo de 2^32: sem viés
-  let n;
-  do { n = crypto.getRandomValues(new Uint32Array(1))[0]; } while (n >= max);
-  return String(n % 1_000_000).padStart(6, '0');
-}
-
 const keyQuery = (k) => (k ? `&key=${k.key}&pin=${k.pin}` : '');
 
 async function openRoom(room) {
   const others = lastStatus?.viewers > 0;
   if (others && !(await ask(`Abrir "${room.name}"?`, 'Quem está conectado agora sai e volta sozinho quando você voltar para onde estava.', 'Abrir'))) return;
-  if (!room.key) {
-    room = { ...room, key: randomHex(12), pin: randomPin() };
+  if (!room.guid) {
+    room = { ...room, guid: crypto.randomUUID() };
     storeMyRooms(myRooms().map((r) => (r.id === room.id ? room : r)));
   }
   if (lastStatus && !lastStatus.allowShare && !joined) broadcastKey = { key: lastStatus.viewKey, pin: lastStatus.pin };
-  await fetch(`${api('allow-share')}&on=1&name=${encodeURIComponent(room.name)}${keyQuery(room)}`, { method: 'POST' });
+  await fetch(`${api('allow-share')}&on=1&name=${encodeURIComponent(room.name)}&room=${room.guid}`, { method: 'POST' });
   activeRoomId = room.id;
   try { sessionStorage.setItem('gamestream-active-room', room.id); } catch { /* sem armazenamento */ }
   storeMyRooms(myRooms().map((r) => (r.id === room.id ? { ...r, at: Date.now() } : r)));
@@ -613,7 +620,7 @@ async function openRoom(room) {
 async function createRoom() {
   const name = $('newRoomName').value.trim().slice(0, 32) || `Sala ${myRooms().length + 1}`;
   $('newRoomDialog').close();
-  const room = { id: Math.random().toString(36).slice(2, 10), name, at: Date.now() };
+  const room = { id: Math.random().toString(36).slice(2, 10), name, guid: crypto.randomUUID(), at: Date.now() };
   storeMyRooms([room, ...myRooms()]);
   $('newRoomName').value = '';
   $('createRoomBtn').disabled = true;
@@ -824,13 +831,18 @@ $('rotateBtn').onclick = async () => {
   if (!(await ask('Gerar um código novo?', 'Todos são desconectados e precisam do código ou link novo para voltar.', 'Gerar'))) return;
   rotating = true;
   $('rotateBtn').disabled = true;
-  await fetch(api('rotate-key'), { method: 'POST' });
-  rotating = false;
-  // Guarda a chave nova na sala aberta (ou na transmissão), para valer também nas próximas aberturas.
-  const s = await (await fetch(api('status'))).json().catch(() => null);
   const room = activeRoom();
-  if (s && room) storeMyRooms(myRooms().map((r) => (r.id === room.id ? { ...r, key: s.viewKey, pin: s.pin } : r)));
-  else if (s && !s.allowShare) broadcastKey = { key: s.viewKey, pin: s.pin };
+  if (room) {
+    // Sala salva: um GUID novo (o código antigo para de valer de vez).
+    const fresh = { ...room, guid: crypto.randomUUID() };
+    storeMyRooms(myRooms().map((r) => (r.id === room.id ? fresh : r)));
+    await fetch(`${api('allow-share')}&on=1&name=${encodeURIComponent(fresh.name)}&room=${fresh.guid}&fresh=1`, { method: 'POST' });
+  } else {
+    await fetch(api('rotate-key'), { method: 'POST' });
+    const s = await (await fetch(api('status'))).json().catch(() => null);
+    if (s && !s.allowShare) broadcastKey = { key: s.viewKey, pin: s.pin };
+  }
+  rotating = false;
   refresh();
 };
 $('maxViewers').onchange = () => {
@@ -871,6 +883,7 @@ try {
 loadSources(saved);
 loadEncoders();
 loadName();
+syncRooms();
 // O limite de pessoas fica no servidor; reaplica o que foi escolhido da última vez.
 try {
   const max = localStorage.getItem('gamestream-max-viewers');

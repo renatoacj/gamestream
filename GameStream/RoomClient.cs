@@ -26,8 +26,11 @@ public sealed partial class RoomClient : IRoomSink, IDisposable
     /// <summary>Se o envio acumular mais que isso, a internet não está dando conta: pula vídeo até o próximo quadro-chave.</summary>
     private const long BacklogLimit = 3 * 1024 * 1024;
 
-    private readonly Uri _wsUri;
-    private readonly string _checkUrl;
+    private readonly string _key;
+    private readonly string _device;
+    private readonly string? _guid;      // código fixo: o endereço é procurado no ntfy.sh (ver RoomDirectory)
+    private string? _origin;
+    private bool _resolveNeeded;
     private readonly string _name;
     private readonly CancellationTokenSource _cts = new();
     private readonly Channel<(byte[] Data, bool IsText)> _queue =
@@ -37,11 +40,14 @@ public sealed partial class RoomClient : IRoomSink, IDisposable
     private volatile JsonObject? _config;      // transmissão em andamento (reenviada ao reconectar)
     private volatile bool _connected;
 
-    /// <summary>Endereço da sala para mostrar dentro do app (a mesma página que os convidados veem).</summary>
-    public string RoomPageUrl { get; }
+    /// <summary>Endereço da sala para mostrar dentro do app (a mesma página que os convidados veem), ou null se ainda não achou a sala.</summary>
+    public string? RoomPageUrl => _origin == null ? null : $"{_origin}/?k={_key}&dev={_device}&app=1&name={Uri.EscapeDataString(_name)}";
 
-    /// <summary>Origem do servidor da sala (https://xxxx.trycloudflare.com).</summary>
-    public string Origin { get; }
+    /// <summary>Origem do servidor da sala (https://xxxx.trycloudflare.com). Com código fixo, muda quando quem criou reabre o app.</summary>
+    public string? Origin => _origin;
+
+    private Uri WsUri => new($"wss://{_origin!["https://".Length..]}/ws?role=viewer&k={_key}&dev={_device}&pub=1");
+    private string CheckUrl => $"{_origin}/api/check?k={_key}";
 
     public string State { get; private set; } = "connecting";   // connecting | connected | closed
 
@@ -76,8 +82,15 @@ public sealed partial class RoomClient : IRoomSink, IDisposable
     {
         error = "Não reconheci isso como uma sala. Cole o código da sala (palavras-e-números) ou o link completo.";
 
-        // Código da sala → o mesmo endereço do link, com a senha curta no lugar da chave longa.
+        // Código fixo de uma sala salva ("nome-da-sala-<guid>"): o endereço é procurado depois, no ntfy.sh.
         var text = link.Trim().ToLowerInvariant().Replace(" ", "");
+        if (RoomIds.GuidFromCode(text) is { } guid)
+        {
+            error = "";
+            return new RoomClient(null, RoomIds.ViewKey(guid), name, guid);
+        }
+
+        // Código da sala → o mesmo endereço do link, com a senha curta no lugar da chave longa.
         if (CodePattern().Match(text) is { Success: true } code)
             link = $"https://{code.Groups[1].Value}.trycloudflare.com/?k={code.Groups[2].Value}";
 
@@ -93,16 +106,15 @@ public sealed partial class RoomClient : IRoomSink, IDisposable
         return new RoomClient(origin, key, name);
     }
 
-    private RoomClient(string origin, string key, string name)
+    private RoomClient(string? origin, string key, string name, string? guid = null)
     {
         // "dev" identifica este PC na sala: liga a conexão do app (que envia a tela) à página
         // da sala aberta dentro do app, para as duas aparecerem como uma pessoa só.
-        var device = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(8)).ToLowerInvariant();
-        Origin = origin;
+        _device = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(8)).ToLowerInvariant();
+        _origin = origin;
+        _key = key;
+        _guid = guid;
         _name = name;
-        _wsUri = new Uri($"wss://{origin["https://".Length..]}/ws?role=viewer&k={key}&dev={device}&pub=1");
-        RoomPageUrl = $"{origin}/?k={key}&dev={device}&app=1&name={Uri.EscapeDataString(name)}";
-        _checkUrl = $"{origin}/api/check?k={key}";
         _ = RunAsync();
     }
 
@@ -112,6 +124,34 @@ public sealed partial class RoomClient : IRoomSink, IDisposable
         var token = _cts.Token;
         while (!token.IsCancellationRequested)
         {
+            // Código fixo: procura o endereço atual da sala (na primeira vez e depois que ela sai do ar).
+            if (_guid != null && (_origin == null || _resolveNeeded))
+            {
+                string? found = null;
+                try
+                {
+                    found = await RoomDirectory.ResolveAsync(_guid, token);
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    Tools.Log("Sala remota (procurando o endereço): " + ex.Message);
+                }
+                if (found == null)
+                {
+                    State = "connecting";
+                    Reason = "gone";
+                    Message = "Quem criou a sala está com o GameStream fechado. Você entra sozinho quando ele abrir.";
+                    try { await Task.Delay(TimeSpan.FromSeconds(15), token); } catch (OperationCanceledException) { break; }
+                    continue;
+                }
+                _origin = found;
+                _resolveNeeded = false;
+            }
+
             using var ws = new ClientWebSocket();
             try
             {
@@ -119,7 +159,7 @@ public sealed partial class RoomClient : IRoomSink, IDisposable
                 using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(token))
                 {
                     timeout.CancelAfter(TimeSpan.FromSeconds(15));
-                    await ws.ConnectAsync(_wsUri, timeout.Token);
+                    await ws.ConnectAsync(WsUri, timeout.Token);
                 }
 
                 // Fila limpa a cada conexão; quem estava transmitindo publica de novo.
@@ -151,10 +191,19 @@ public sealed partial class RoomClient : IRoomSink, IDisposable
                 {
                     // A sala existe, mas recusou a chave: não adianta insistir (e tentativas erradas
                     // demais bloqueiam a entrada por código para todo mundo).
-                    Message = "Código ou link incorreto. Confira com quem criou a sala (o código muda se ela gerar um novo).";
+                    Message = _guid != null
+                        ? "Este código não vale mais: quem criou a sala apagou a sala ou gerou um código novo."
+                        : "Código ou link incorreto. Confira com quem criou a sala (o código muda se ela gerar um novo).";
                     break;
                 }
-                if (check is 530 or 502 or 404)
+                if (_guid != null && check is null or 530 or 502 or 404)
+                {
+                    // Código fixo: a sala mudou de endereço (quem criou reabriu o app) ou ainda está fechada.
+                    _resolveNeeded = true;
+                    Reason = "gone";
+                    Message = "Quem criou a sala está com o GameStream fechado ou a internet dele caiu. Você entra sozinho quando ele voltar.";
+                }
+                else if (check is 530 or 502 or 404)
                 {
                     // A Cloudflare não acha mais o túnel (erro 1033): quem criou a sala fechou o app ou a
                     // conexão dele caiu, e o endereço mudou. Continua tentando caso tenha sido só um instante.
@@ -172,7 +221,8 @@ public sealed partial class RoomClient : IRoomSink, IDisposable
             if (token.IsCancellationRequested) break;
             State = "connecting";
             Message ??= "A conexão com a sala caiu. Tentando de novo…";
-            try { await Task.Delay(TimeSpan.FromSeconds(_connected ? 3 : 5), token); } catch (OperationCanceledException) { break; }
+            var wait = _resolveNeeded ? 10 : _connected ? 3 : 5;
+            try { await Task.Delay(TimeSpan.FromSeconds(wait), token); } catch (OperationCanceledException) { break; }
         }
         _connected = false;
         State = "closed";
@@ -187,7 +237,7 @@ public sealed partial class RoomClient : IRoomSink, IDisposable
         try
         {
             using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-            using var res = await http.GetAsync(_checkUrl, token);
+            using var res = await http.GetAsync(CheckUrl, token);
             return (int)res.StatusCode;
         }
         catch
