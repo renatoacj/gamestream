@@ -20,7 +20,7 @@
 ## Recursos
 
 - **Transmissão ou sala**: na **Transmissão** só você transmite e os outros assistem; numa **sala**, quem entra também pode compartilhar a tela. As telas aparecem como miniaturas, e um clique expande a que você quer assistir.
-- **Salas salvas**: dê um nome à sala e reabra quando quiser. Cada abertura gera um código novo para mandar aos amigos.
+- **Salas salvas com código fixo**: cada sala salva tem um código que não muda (`nome-da-sala-<guid>`), nem fechando e abrindo o app. Quem já tem o código volta sozinho quando a sala reabre. "Novo código" troca o código (o antigo para de valer).
 - **Duas formas de participar**: pelo navegador, sem instalar nada (Chrome ou Edge para compartilhar), ou pelo GameStream em **Entrar em uma sala**, para compartilhar com a mesma qualidade de quem criou a sala.
 - **Código da sala**: além do link, a sala tem um código como `spears-manhattan-calgary-until-482913`, para colar no GameStream. Ele é o próprio endereço da sala em outro formato e não depende de nenhum serviço.
 - **Link público gratuito e automático**: o app abre um [Cloudflare Quick Tunnel](https://try.cloudflare.com) e mostra um link `https://….trycloudflare.com`.
@@ -112,15 +112,27 @@ Para recriar o ícone: `powershell -ExecutionPolicy Bypass -File tools/make-icon
 | [`GameStream/AudioCapture.cs`](GameStream/AudioCapture.cs) / [`ProcessLoopback.cs`](GameStream/ProcessLoopback.cs) | Áudio da janela ou do PC e codificação Opus |
 | [`GameStream/CaptureSources.cs`](GameStream/CaptureSources.cs) | Lista de janelas e monitores |
 | [`GameStream/PublicTunnel.cs`](GameStream/PublicTunnel.cs) | Baixa e executa o `cloudflared` e lê o link público |
-| [`GameStream/wwwroot/host.js`](GameStream/wwwroot/host.js) | Interface do app (configurações e status) |
-| [`GameStream/wwwroot/viewer.js`](GameStream/wwwroot/viewer.js) | Decodificação e reprodução (navegador do amigo) |
+| [`GameStream/RoomClient.cs`](GameStream/RoomClient.cs) | Entrar pelo app na sala de outra pessoa e enviar a tela para lá |
+| [`GameStream/RoomDirectory.cs`](GameStream/RoomDirectory.cs) | Código fixo das salas salvas (endereço atual publicado no ntfy.sh, criptografado) |
+| [`GameStream/wwwroot/host.js`](GameStream/wwwroot/host.js) | Interface do app (transmissão, salas, configurações e status) |
+| [`GameStream/wwwroot/room.js`](GameStream/wwwroot/room.js) | Página da sala: decodificação e reprodução (até duas telas) e compartilhamento pelo navegador |
 
-**Protocolo dos pacotes** (binário, via WebSocket): `[tipo u8: 1=vídeo 2=áudio][flags u8: bit0=quadro-chave][timestamp f64 LE µs][dados]`.
+**Protocolo dos pacotes** (binário, via WebSocket): `[tipo u8: 1=vídeo 2=áudio 3=miniatura][flags u8: bit0=quadro-chave][tela u16 LE][timestamp f64 LE µs][dados]`.
+
+### Código fixo das salas (ntfy.sh)
+
+O endereço do túnel da Cloudflare muda sempre que o app abre. Para o código das salas salvas continuar valendo, o app de quem criou a sala publica o endereço atual no [ntfy.sh](https://ntfy.sh), um serviço público de mensagens que não pede conta, e o app de quem tem o código lê de lá:
+
+- o canal é um hash do GUID da sala, então o ntfy não sabe de que sala se trata;
+- a mensagem vai criptografada (AES-GCM) com uma chave tirada do GUID: sem o código, é só texto embaralhado;
+- o app só aceita endereços `https://*.trycloudflare.com` vindos de lá.
+
+O link para o navegador continua sendo o endereço da Cloudflare, que muda quando o app fecha.
 
 ## Limitações
 
 - **Upload**: cada amigo recebe uma cópia do vídeo, então o upload necessário é o bitrate × o número de amigos. Com 6 Mbps e 3 amigos, são cerca de 18 Mbps.
-- **Quick Tunnel**: a Cloudflare oferece esse serviço de graça e sem garantia de disponibilidade (SLA). O link muda a cada vez que o app abre.
+- **Quick Tunnel**: a Cloudflare oferece esse serviço de graça e sem garantia de disponibilidade (SLA). O link do navegador muda a cada vez que o app abre (o código das salas salvas, não).
 - **Navegador do amigo**: precisa ter WebCodecs. Chrome, Edge e Safari atualizados funcionam, e o Firefox recente também deve funcionar.
 
 ## Licença
