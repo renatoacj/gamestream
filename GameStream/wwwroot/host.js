@@ -447,9 +447,32 @@ function myName() {
   return $('myName').value.trim().slice(0, 24);
 }
 
-$('myName').onchange = () => {
+// O nome fica guardado pelo app (arquivo de configurações), a cada letra digitada: o armazenamento
+// do navegador embutido pode não chegar ao disco se o app for fechado logo depois.
+let nameSaveTimer = null;
+function saveName() {
   try { localStorage.setItem('gamestream-name', myName()); } catch { /* sem armazenamento */ }
-};
+  clearTimeout(nameSaveTimer);
+  nameSaveTimer = setTimeout(() => fetch(api('app-settings'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: myName() }),
+  }).catch(() => {}), 400);
+}
+$('myName').oninput = saveName;
+$('myName').onchange = saveName;
+
+async function loadName() {
+  try {
+    const s = await (await fetch(api('app-settings'))).json();
+    if (s.name && !myName()) {
+      $('myName').value = s.name;
+      refresh();   // a sala embutida mostra o nome
+    } else if (!s.name && myName()) {
+      saveName();   // nome de versões antigas (só no navegador embutido): passa a ficar no app também
+    }
+  } catch { /* app fechando */ }
+}
 
 /** Estou numa sala que eu mesmo criei? */
 const inOwnRoom = () => !!lastStatus?.allowShare && !joined;
@@ -483,7 +506,6 @@ function renderView() {
   $('hostSection').hidden = !!joined || lobby;
   $('guestSection').hidden = !joined;
   $('roomStats').hidden = !!joined || lobby;
-  $('codeTitle').textContent = own ? 'Código da sala' : 'Código para assistir';
   $('asideTitle').textContent = joined ? 'Sala' : 'Convite';
   $('viewerLabel').textContent = own ? 'Pessoas na sala' : 'Pessoas assistindo';
   $('guestStreamsRow').hidden = !own;
@@ -848,6 +870,7 @@ try {
 } catch { /* sem armazenamento */ }
 loadSources(saved);
 loadEncoders();
+loadName();
 // O limite de pessoas fica no servidor; reaplica o que foi escolhido da última vez.
 try {
   const max = localStorage.getItem('gamestream-max-viewers');

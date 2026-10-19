@@ -10,6 +10,9 @@ public sealed class AppSettings
     /// <summary>Fechar a janela deixa o app rodando na bandeja (perto do relógio) em vez de encerrá-lo.</summary>
     public bool CloseToTray { get; set; } = true;
 
+    /// <summary>Nome que aparece para os outros na sala ("Seu nome", no menu).</summary>
+    public string Name { get; set; } = "";
+
     public static AppSettings Current { get; } = Load();
 
     private static string FilePath => Path.Combine(Tools.DataDir, "app-settings.json");
