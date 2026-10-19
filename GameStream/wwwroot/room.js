@@ -886,6 +886,14 @@ function toggleFullscreen() {
 }
 $('fullscreen').onclick = toggleFullscreen;
 
+// Em tela cheia só a área do vídeo aparece: o som e o volume vão junto, para o canto da tela.
+document.addEventListener('fullscreenchange', () => {
+  const full = document.fullscreenElement === $('stage');
+  if (full) $('stageTop').append($('soundControls'));
+  else document.querySelector('footer.bar').append($('soundControls'));
+  setLabel($('fullscreen'), 'maximize', full ? 'Sair da tela cheia' : 'Tela cheia');
+});
+
 // ---------- Compartilhar a minha tela ----------
 //
 // A captura (getDisplayMedia) fica nesta página; a codificação roda num Worker

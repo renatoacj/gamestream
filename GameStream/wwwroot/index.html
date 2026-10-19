@@ -68,6 +68,15 @@
   .stage-top > * { pointer-events: auto; }
   .stage-top button, .stage-top .label { background: rgba(15, 17, 21, .8); backdrop-filter: blur(6px); }
   .stage-top .label { padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border); font-weight: 600; }
+  .sound-controls { display: flex; align-items: center; gap: 8px; }
+  .sound-controls label { display: flex; align-items: center; gap: 6px; }
+  .sound-controls input[type=range] { width: 110px; accent-color: var(--accent); }
+  /* Em tela cheia: o grupo de som fica no canto superior direito, sobre o vídeo */
+  .stage-top .sound-controls {
+    margin-left: auto; padding: 4px 6px 4px 10px; border-radius: 10px; border: 1px solid var(--border);
+    background: rgba(15, 17, 21, .8); backdrop-filter: blur(6px);
+  }
+  .stage-top .sound-controls button { background: transparent; }
   #unmute {
     position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
     background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600;
@@ -193,7 +202,7 @@
 <main>
   <section class="stage" id="stage" hidden>
     <div class="panes" id="panes"></div>
-    <div class="stage-top">
+    <div class="stage-top" id="stageTop">
       <button id="backBtn" data-icon="arrow-left" title="Voltar para a lista de telas">Todas as telas</button>
     </div>
     <button id="unmute" data-icon="volume" hidden>Clique para ativar o som</button>
@@ -211,11 +220,14 @@
   </select>
   <span class="muted" id="info"></span>
   <span class="spacer"></span>
-  <button id="muteBtn" data-icon="volume-off" title="Ligar/desligar o som">Som desligado</button>
-  <label title="Volume desta tela (lembrado por pessoa). Acima de 100% aumenta o som de quem transmite baixo.">
-    <input type="range" id="volume" min="0" max="4" step="0.05" value="1"><span id="volumeLabel" class="muted">100%</span>
-  </label>
-  <button id="fullscreen" data-icon="maximize">Tela cheia</button>
+  <!-- Som e tela cheia: em tela cheia este grupo vai para o canto da tela (a barra de baixo some) -->
+  <div class="sound-controls" id="soundControls">
+    <button id="muteBtn" data-icon="volume-off" title="Ligar/desligar o som">Som desligado</button>
+    <label title="Volume desta tela (lembrado por pessoa). Acima de 100% aumenta o som de quem transmite baixo.">
+      <input type="range" id="volume" min="0" max="4" step="0.05" value="1"><span id="volumeLabel" class="muted">100%</span>
+    </label>
+    <button id="fullscreen" data-icon="maximize">Tela cheia</button>
+  </div>
 </footer>
 
 <div id="toast" hidden></div>
