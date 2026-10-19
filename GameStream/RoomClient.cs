@@ -58,6 +58,23 @@ public sealed partial class RoomClient : IRoomSink, IDisposable
 
     public string? Message { get; private set; }
 
+    /// <summary>Onde tocar o som da tela escolhida (o app toca, não a página; ver <see cref="RoomAudioPlayer"/>).</summary>
+    public RoomAudioPlayer? Audio { get; set; }
+
+    private volatile int _listening = -1;   // tela cujo som recebemos (-1 = nenhuma)
+
+    /// <summary>Passa a receber só o som desta tela (o vídeo continua vindo pela página da sala).</summary>
+    public void Listen(ushort? stream)
+    {
+        var next = stream ?? -1;
+        var previous = _listening;
+        if (next == previous) return;
+        _listening = next;
+        if (!_connected) return;   // ao conectar, o pedido é feito de novo
+        if (previous >= 0) SendText(new JsonObject { ["type"] = "unwatch", ["stream"] = previous });
+        if (next >= 0) SendText(new JsonObject { ["type"] = "watch", ["stream"] = next, ["audioOnly"] = true });
+    }
+
     /// <summary>A sala recusou ou encerrou o nosso compartilhamento (motivo para mostrar ao usuário).</summary>
     public event Action<string>? PublishRejected;
 
@@ -171,6 +188,7 @@ public sealed partial class RoomClient : IRoomSink, IDisposable
                 Reason = null;
                 SendText(new JsonObject { ["type"] = "hello", ["name"] = _name });
                 if (_config is { } config) SendPublish(config);
+                if (_listening >= 0) SendText(new JsonObject { ["type"] = "watch", ["stream"] = _listening, ["audioOnly"] = true });
 
                 using var session = CancellationTokenSource.CreateLinkedTokenSource(token);
                 var sending = SendLoopAsync(ws, session.Token);
@@ -267,6 +285,7 @@ public sealed partial class RoomClient : IRoomSink, IDisposable
     {
         var buffer = new byte[16 * 1024];
         using var ms = new MemoryStream();
+        using var bin = new MemoryStream();
         while (ws.State == WebSocketState.Open)
         {
             WebSocketReceiveResult r;
@@ -274,9 +293,15 @@ public sealed partial class RoomClient : IRoomSink, IDisposable
             catch { return false; }
             if (r.MessageType == WebSocketMessageType.Close) return false;
 
-            // Só nos interessam os avisos em texto; miniaturas e mídia de outras telas são ignoradas.
+            // Binário: só o som da tela escolhida interessa (vai para o RoomAudioPlayer); o resto é ignorado.
             if (r.MessageType != WebSocketMessageType.Text)
             {
+                bin.Write(buffer, 0, r.Count);
+                if (bin.Length > 512 * 1024) bin.SetLength(0);
+                if (!r.EndOfMessage) continue;
+                var packet = bin.ToArray();
+                bin.SetLength(0);
+                if (_listening >= 0 && packet.Length > 12 && packet[0] == 2) Audio?.OnPacket(packet);
                 continue;
             }
             ms.Write(buffer, 0, r.Count);

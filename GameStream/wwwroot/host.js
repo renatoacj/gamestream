@@ -742,6 +742,20 @@ async function leaveRoom() {
 }
 
 $('joinBtn').onclick = () => joinRoom();
+
+// O som da sala é tocado pelo próprio app (RoomAudioPlayer.cs); a página da sala avisa qual tela toca.
+window.addEventListener('message', (e) => {
+  if (e.source !== $('room').contentWindow) return;
+  const m = e.data;
+  if (!m || m.gs !== 'audio') return;
+  const stream = Number.isInteger(m.stream) && m.stream >= 0 && m.stream <= 65535 ? m.stream : null;
+  const volume = Math.min(4, Math.max(0, Number(m.volume) || 0));
+  fetch(api('listen'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ stream, volume, muted: m.muted === true }),
+  }).catch(() => {});
+});
 $('roomDownLeave').onclick = () => leaveRoom();
 $('roomDownNew').onclick = async () => {
   await leaveRoom();
