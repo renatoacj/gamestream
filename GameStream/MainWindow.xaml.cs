@@ -12,18 +12,92 @@ public partial class MainWindow : Window
     private StreamServer? _server;
     private PublicTunnel? _tunnel;
     private Broadcaster? _broadcaster;
+    private System.Windows.Forms.NotifyIcon? _tray;
+    private bool _exiting;            // fechar de verdade (Sair, desligar o Windows), não ir para a bandeja
+    private bool _trayHintShown;
+    private bool _startHidden;        // aberto com o Windows: começa só na bandeja
 
-    public MainWindow()
+    public MainWindow(bool startHidden = false)
     {
         InitializeComponent();
+        _startHidden = startHidden;
+        if (startHidden)
+        {
+            // A janela precisa existir para o WebView2 iniciar; fica minimizada e fora da barra até ser escondida.
+            ShowInTaskbar = false;
+            WindowState = WindowState.Minimized;
+        }
         SourceInitialized += (_, _) => UseDarkTitleBar();
         Loaded += OnLoaded;
+        CreateTray();
+        Closing += (_, e) =>
+        {
+            if (_exiting || !AppSettings.Current.CloseToTray) return;
+            // Fechar a janela só a esconde: transmissão e salas continuam funcionando.
+            e.Cancel = true;
+            Hide();
+            if (!_trayHintShown)
+            {
+                _trayHintShown = true;
+                _tray?.ShowBalloonTip(4000, "O GameStream continua aberto",
+                    "Ele está aqui na bandeja. Para sair, clique com o botão direito no ícone.",
+                    System.Windows.Forms.ToolTipIcon.Info);
+            }
+        };
         Closed += async (_, _) =>
         {
+            if (_tray != null)
+            {
+                _tray.Visible = false;
+                _tray.Dispose();
+            }
             _broadcaster?.Dispose();
             _tunnel?.Dispose();
             if (_server != null) await _server.DisposeAsync();
         };
+    }
+
+    // ---------- Bandeja do sistema ----------
+
+    private void CreateTray()
+    {
+        var menu = new System.Windows.Forms.ContextMenuStrip();
+        menu.Items.Add("Abrir o GameStream", null, (_, _) => ShowFromTray());
+        menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
+        menu.Items.Add("Sair", null, (_, _) => ExitApp());
+        _tray = new System.Windows.Forms.NotifyIcon
+        {
+            Icon = System.Drawing.Icon.ExtractAssociatedIcon(Environment.ProcessPath!),
+            Text = "GameStream",
+            ContextMenuStrip = menu,
+            Visible = true,
+        };
+        _tray.MouseClick += (_, e) =>
+        {
+            if (e.Button == System.Windows.Forms.MouseButtons.Left) ShowFromTray();
+        };
+    }
+
+    /// <summary>Traz a janela de volta (clique no ícone da bandeja ou o app aberto de novo).</summary>
+    public void ShowFromTray()
+    {
+        _startHidden = false;
+        Show();
+        ShowInTaskbar = true;
+        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        Activate();
+        // Traz para a frente mesmo quando outro programa (o jogo) está em primeiro plano.
+        Topmost = true;
+        Topmost = false;
+    }
+
+    /// <summary>A próxima tentativa de fechar encerra o app de verdade.</summary>
+    public void PrepareExit() => _exiting = true;
+
+    private void ExitApp()
+    {
+        _exiting = true;
+        Close();
     }
 
     /// <summary>Barra de título escura, na cor do app (em vez da barra branca padrão).</summary>
@@ -123,6 +197,12 @@ public partial class MainWindow : Window
             // Só em compilações de desenvolvimento: permite testar a API de controle por script.
             Tools.Log($"DEBUG controle: http://localhost:{port}/api/status?t={_server.HostToken}");
 #endif
+            if (_startHidden)
+            {
+                // Aberto com o Windows: fica só na bandeja (ou minimizado, se a bandeja estiver desligada).
+                if (AppSettings.Current.CloseToTray) Hide();
+                ShowInTaskbar = true;
+            }
         }
         catch (Exception ex)
         {
