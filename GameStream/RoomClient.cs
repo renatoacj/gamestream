@@ -40,8 +40,13 @@ public sealed partial class RoomClient : IRoomSink, IDisposable
     private volatile JsonObject? _config;      // transmissão em andamento (reenviada ao reconectar)
     private volatile bool _connected;
 
-    /// <summary>Endereço da sala para mostrar dentro do app (a mesma página que os convidados veem), ou null se ainda não achou a sala.</summary>
-    public string? RoomPageUrl => _origin == null ? null : $"{_origin}/?k={_key}&dev={_device}&app=1&name={Uri.EscapeDataString(_name)}";
+    /// <summary>
+    /// Página da sala para mostrar dentro do app, ou null se ainda não achou a sala. É a página DESTE app (servida
+    /// localmente) conectada ao servidor do amigo: funciona igual mesmo que o amigo esteja numa versão mais antiga
+    /// (e o som é tocado por este app; ver RoomAudioPlayer).
+    /// </summary>
+    public string? RoomPageUrl => _origin == null ? null
+        : $"/?remote={Uri.EscapeDataString(_origin)}&k={_key}&dev={_device}&app=1&name={Uri.EscapeDataString(_name)}";
 
     /// <summary>Origem do servidor da sala (https://xxxx.trycloudflare.com). Com código fixo, muda quando quem criou reabre o app.</summary>
     public string? Origin => _origin;
