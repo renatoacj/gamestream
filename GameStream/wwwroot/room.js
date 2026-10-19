@@ -24,8 +24,6 @@ const AUDIO_MIN_LEAD = 0.08;  // s de folga no áudio para absorver variação d
 const AUDIO_MAX_LEAD = 0.45;  // acima disso descarta para não acumular atraso
 
 const $ = (id) => document.getElementById(id);
-const canvas = $('screen');
-const ctx2d = canvas.getContext('2d');
 
 let ws = null;
 let myId = null;
@@ -37,7 +35,10 @@ let closedReason = null;
 let people = [];
 const streams = new Map();        // número → { no, owner, name, audio, thumbUrl }
 const pendingThumbs = new Map();  // miniatura que chegou antes da lista da sala
-let watching = null;              // número da transmissão expandida
+let watched = [];                 // telas abertas (até duas, lado a lado)
+let audioNo = null;               // das telas abertas, a que toca som (uma por vez)
+const MAX_WATCHED = 2;
+const players = new Map();        // número da tela → Player (quadro + decodificadores)
 let autoWatch = true;             // abre sozinho quando só há uma tela (até o usuário voltar à lista)
 
 // ---------- Nome ----------
@@ -84,8 +85,7 @@ function connect() {
   };
   ws.onclose = () => {
     stopSharing(false);
-    resetDecoders();
-    watching = null;
+    for (const no of [...watched]) closePlayer(no, false);
     streams.clear();
     people = [];
     render();
@@ -152,7 +152,7 @@ function onControl(msg) {
       break;
 
     case 'config':
-      if (msg.stream === watching) configureDecoders(msg);
+      players.get(msg.stream)?.configure(msg);
       break;
 
     case 'published':
@@ -204,24 +204,21 @@ function updateStreams(list) {
     streams.delete(no);
   }
 
-  if (watching !== null && !streams.has(watching)) {
-    // A tela que eu assistia acabou: volta para a lista.
-    resetDecoders();
-    watching = null;
-    toast('A transmissão que você assistia foi encerrada.');
+  for (const no of [...watched]) {
+    if (streams.has(no)) continue;
+    closePlayer(no, false);
+    toast('Uma transmissão que você assistia foi encerrada.');
   }
 
   // Só uma tela na sala (o caso mais comum): já abre direto nela.
-  // A própria transmissão não abre sozinha: fica só como miniatura, para o PC de quem
-  // transmite não gastar placa de vídeo e memória decodificando a própria tela.
-  if (watching === null && autoWatch) {
+  if (!watched.length && autoWatch) {
     const others = [...streams.values()].filter((s) => !isMine(s) && !isOwnBroadcast(s));
     if (others.length === 1) watch(others[0].no, false);
   }
 }
 
-// A transmissão do app, vista de dentro do próprio app (quem criou a sala). Diferente de "isMine",
-// dá para abrir a prévia ao vivo com um clique, se a pessoa quiser conferir.
+// A transmissão do app, vista de dentro do próprio app (quem criou a sala). Como "isMine", não aparece
+// na sala: quem transmite não precisa ver a própria tela (e o PC não gasta decodificando). Fica só o aviso.
 const isOwnBroadcast = (s) => EMBEDDED && s.no === HOST_STREAM;
 
 // Minha tela: enviada por esta página ou pelo app deste mesmo PC.
@@ -249,44 +246,62 @@ function onPacket(buf) {
     return;
   }
 
-  if (no !== watching) return;
-  const timestamp = view.getFloat64(4, true);
-  const data = new Uint8Array(buf, HEADER);
-
-  if (kind === KIND_VIDEO) {
-    if (!videoDecoder || videoDecoder.state !== 'configured') return;
-    if (waitingForKey && !key) return;
-    waitingForKey = false;
-    // Se o computador de quem assiste não der conta, pula até o próximo quadro-chave.
-    if (videoDecoder.decodeQueueSize > 30) { waitingForKey = true; return; }
-    videoDecoder.decode(new EncodedVideoChunk({ type: key ? 'key' : 'delta', timestamp, data }));
-  } else if (kind === KIND_AUDIO) {
-    if (!audioDecoder || audioDecoder.state !== 'configured') return;
-    audioDecoder.decode(new EncodedAudioChunk({ type: 'key', timestamp, data }));
-  }
+  players.get(no)?.onPacket(kind, key, view.getFloat64(4, true), new Uint8Array(buf, HEADER));
 }
 
 // ---------- Escolher o que assistir ----------
 
+/** Abre só esta tela (fecha as outras que estiverem abertas). */
 function watch(no, byUser = true) {
-  if (no === watching) return;
+  if (watched.length === 1 && watched[0] === no) return;
   const s = streams.get(no);
-  if (!s || isMine(s)) return;
-  if (watching !== null) send({ type: 'unwatch', stream: watching });
-  resetDecoders();
-  watching = no;
+  if (!s || isMine(s) || isOwnBroadcast(s)) return;
+  for (const other of [...watched]) if (other !== no) closePlayer(other, false);
   if (byUser) autoWatch = true;
-  showOverlay('Conectando à transmissão…');
-  send({ type: 'watch', stream: no });
-  loadVolumeForWatched();   // volume lembrado para esta pessoa
-  setMuted(muted);          // atualiza o texto do botão de som com o nome
+  if (!players.has(no)) openPlayer(no);
+  setAudioStream(no);
   render();
 }
 
+/** Abre esta tela ao lado da que já está aberta (no máximo duas; a segunda é trocada). */
+function watchAlso(no) {
+  const s = streams.get(no);
+  if (!s || isMine(s) || isOwnBroadcast(s) || players.has(no)) return;
+  if (watched.length >= MAX_WATCHED) closePlayer(watched[watched.length - 1], false);
+  openPlayer(no);
+  if (audioNo === null) setAudioStream(no);
+  render();
+}
+
+function openPlayer(no) {
+  const p = new Player(no);
+  players.set(no, p);
+  watched.push(no);
+  $('panes').append(p.el);
+  send({ type: 'watch', stream: no });
+}
+
+function closePlayer(no, rerender = true) {
+  const p = players.get(no);
+  if (!p) return;
+  send({ type: 'unwatch', stream: no });
+  p.destroy();
+  players.delete(no);
+  watched = watched.filter((x) => x !== no);
+  if (audioNo === no) setAudioStream(watched[0] ?? null);
+  if (rerender) render();
+}
+
+/** Escolhe qual das telas abertas toca som. */
+function setAudioStream(no) {
+  audioNo = no;
+  for (const p of players.values()) p.setAudio(p.no === no);
+  loadVolumeForWatched();   // volume lembrado para esta pessoa
+  setMuted(muted);          // atualiza o botão de som com o nome
+}
+
 function backToList() {
-  if (watching !== null) send({ type: 'unwatch', stream: watching });
-  resetDecoders();
-  watching = null;
+  for (const no of [...watched]) closePlayer(no, false);
   autoWatch = false;
   if (document.fullscreenElement) document.exitFullscreen();
   render();
@@ -301,12 +316,6 @@ let roomMessage = { title: 'Conectando…', text: '' };
 function showRoomMessage(title, text = '') {
   roomMessage = { title, text };
   render();
-}
-
-function showOverlay(title, text = '') {
-  $('overlayTitle').textContent = title;
-  $('overlayText').textContent = text;
-  $('overlay').hidden = false;
 }
 
 let toastTimer = null;
@@ -349,10 +358,14 @@ function render() {
   const me = people.find((p) => p.id === myId);
   if (me) $('myName').textContent = me.name;
 
-  // Tela expandida
-  const s = watching !== null ? streams.get(watching) : null;
-  $('stage').hidden = !s;
-  if (s) $('stageName').textContent = s.name;
+  // Telas abertas (uma ou duas lado a lado)
+  $('stage').hidden = !watched.length;
+  $('panes').classList.toggle('two', watched.length > 1);
+  for (const p of players.values()) p.updateLabel();
+
+  // A própria tela não aparece na sala; no lugar dela, só este aviso.
+  const sharingMine = [...streams.values()].some((s) => isMine(s) || isOwnBroadcast(s)) || publisher?.streamNo != null;
+  $('sharingBadge').hidden = !sharingMine;
 
   renderTiles();
 
@@ -368,16 +381,22 @@ function render() {
 
 function renderTiles() {
   const box = $('tiles');
-  box.className = 'tiles ' + (watching !== null ? 'strip' : 'grid');
+  // A minha tela não entra na lista: basta o aviso "Sua tela está sendo transmitida" no topo.
+  const list = [...streams.values()].filter((s) => !isMine(s) && !isOwnBroadcast(s)).sort((a, b) => a.no - b.no);
+  const sharingMine = streams.size > list.length;
+  box.className = 'tiles ' + (watched.length ? 'strip' : 'grid');
   box.textContent = '';
 
-  if (roomMessage || !streams.size) {
-    const m = roomMessage || (canShare ? {
+  if (roomMessage || !list.length) {
+    const m = roomMessage || (sharingMine ? {
+      title: 'Sua tela está sendo transmitida',
+      text: canShare ? 'Quando mais alguém compartilhar, a tela aparece aqui.' : 'Quem tem o código ou o link está vendo ao vivo.',
+    } : canShare ? {
       title: 'Ninguém está compartilhando a tela ainda',
       text: EMBEDDED || IN_APP ? 'Quando alguém começar, a tela aparece aqui.'
         : 'Quando alguém começar, a tela aparece aqui. Você também pode compartilhar a sua.',
     } : EMBEDDED ? {
-      title: 'Sua transmissão aparece aqui',
+      title: 'Pronto para transmitir',
       text: 'Escolha a janela abaixo e clique em Iniciar transmissão.',
     } : {
       title: 'A transmissão ainda não começou',
@@ -393,17 +412,13 @@ function renderTiles() {
     return;
   }
 
-  for (const s of [...streams.values()].sort((a, b) => a.no - b.no)) {
-    const mine = isMine(s);
+  for (const s of list) {
+    const isOpen = players.has(s.no);
     const tile = document.createElement('div');
-    const own = isOwnBroadcast(s);
-    const paused = mine || (own && s.no !== watching);
-    tile.className = 'tile' + (s.no === watching ? ' selected' : '') + (mine ? ' mine' : '') + (paused ? ' paused' : '');
+    tile.className = 'tile' + (isOpen ? ' selected' : '');
     tile.dataset.no = s.no;
-    tile.tabIndex = mine ? -1 : 0;
-    tile.title = mine ? 'Esta é a sua tela'
-      : own ? 'Sua transmissão. A prévia fica pausada para poupar o PC; clique para ver ao vivo.'
-      : `Assistir à tela de ${s.name}`;
+    tile.tabIndex = 0;
+    tile.title = `Assistir à tela de ${s.name}`;
 
     const thumb = document.createElement('div');
     thumb.className = 'thumb';
@@ -420,28 +435,31 @@ function renderTiles() {
     live.textContent = 'AO VIVO';
     const hint = document.createElement('span');
     hint.className = 'expand-hint';
-    hint.textContent = own ? 'Ver prévia ao vivo' : 'Assistir';
+    hint.textContent = 'Assistir';
     thumb.append(live, hint);
-    if (paused) {
-      // Para quem transmite: a imagem parada é proposital, os outros estão vendo ao vivo.
-      const tag = document.createElement('span');
-      tag.className = 'paused-tag';
-      tag.textContent = 'Transmitindo · prévia pausada';
-      thumb.append(tag);
-    }
 
     const meta = document.createElement('div');
     meta.className = 'meta';
     const name = document.createElement('b');
     name.textContent = s.name;
-    const tag = document.createElement('small');
-    tag.textContent = mine ? 'você' : own ? (s.no === watching ? 'você' : 'você · prévia pausada') : '';
-    meta.append(name, tag);
+    meta.append(name);
 
-    // Alto-falante: só a tela aberta toca som. O ícone mostra qual está tocando;
+    // Assistir junto: abre esta tela ao lado da que já está aberta.
+    if (watched.length && !isOpen) {
+      const both = document.createElement('button');
+      both.className = 'speaker';
+      both.append(icon('columns'));
+      both.title = watched.length >= MAX_WATCHED
+        ? `Assistir ${s.name} no lugar da segunda tela`
+        : `Assistir ${s.name} ao lado da tela aberta`;
+      both.onclick = (e) => { e.stopPropagation(); watchAlso(s.no); };
+      meta.append(both);
+    }
+
+    // Alto-falante: só uma tela toca som. O ícone mostra qual está tocando;
     // clicar ativa o som desta tela (silenciando as outras) ou silencia a que está tocando.
-    if (!mine && !own && s.audio) {
-      const playing = s.no === watching && !muted && audioCtx?.state === 'running';
+    if (s.audio) {
+      const playing = s.no === audioNo && !muted && audioCtx?.state === 'running';
       const speaker = document.createElement('button');
       speaker.className = 'speaker' + (playing ? ' on' : '');
       speaker.append(icon(playing ? 'volume' : 'volume-off'));
@@ -451,7 +469,7 @@ function renderTiles() {
         if (playing) {
           setMuted(true);
         } else {
-          watch(s.no);
+          if (players.has(s.no)) setAudioStream(s.no); else watch(s.no);
           enableAudio();
         }
       };
@@ -471,165 +489,245 @@ function renderTiles() {
     }
 
     tile.append(thumb, meta);
-    if (!mine) {
-      tile.onclick = () => watch(s.no);
-      tile.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') watch(s.no); };
-    }
+    tile.onclick = () => watch(s.no);
+    tile.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') watch(s.no); };
     box.append(tile);
   }
 }
 
-// ---------- Decodificação ----------
-
-let videoDecoder = null;
-let audioDecoder = null;
-let waitingForKey = true;
-let live = false;
-let configSeq = 0;
-
-let framesDrawn = 0;
-setInterval(() => {
-  $('info').textContent = live && watching !== null ? `${canvas.width}×${canvas.height} · ${Math.round(framesDrawn / 2)} fps` : '';
-  $('info').title = `Folga contra oscilação da rede: ${Math.round(playoutDelay / 1000)} ms`;
-  framesDrawn = 0;
-}, 2000);
-
-async function configureDecoders(cfg) {
-  resetDecoders();
-  const seq = configSeq;
-
-  // Nem todo navegador decodifica H.264 (ex.: Chromium sem codecs proprietários em algumas distros Linux).
-  const videoCfg = { codec: cfg.video.codec, optimizeForLatency: true };
-  const { supported } = await VideoDecoder.isConfigSupported(videoCfg).catch(() => ({ supported: false }));
-  if (seq !== configSeq) return;   // chegou outra config enquanto verificava
-  if (!supported) {
-    showOverlay('Seu navegador não reproduz este vídeo', 'Abra o link no Google Chrome, Microsoft Edge ou Safari.');
-    return;
-  }
-
-  videoDecoder = new VideoDecoder({
-    output: enqueueFrame,
-    error: (e) => {
-      // Decoder com erro fica fechado: recria e espera o próximo quadro-chave.
-      console.error('VideoDecoder', e);
-      if (seq === configSeq) setTimeout(() => seq === configSeq && configureDecoders(cfg), 500);
-    },
-  });
-  videoDecoder.configure(videoCfg);
-
-  // Dentro do app, a transmissão do próprio app fica sem som (senão você ouviria o jogo duas vezes).
-  const ownStream = EMBEDDED && cfg.stream === HOST_STREAM;
-  if (cfg.audio && !ownStream && 'AudioDecoder' in window) {
-    audioDecoder = new AudioDecoder({
-      output: playAudio,
-      error: (e) => console.error('AudioDecoder', e),
-    });
-    audioDecoder.configure(cfg.audio);
-  }
-  updateUnmuteHint();
-}
-
-function resetDecoders() {
-  clearFrameQueue();
-  configSeq++;   // invalida verificações/tentativas assíncronas ainda pendentes
-  for (const d of [videoDecoder, audioDecoder]) {
-    if (d && d.state !== 'closed') d.close();
-  }
-  videoDecoder = audioDecoder = null;
-  waitingForKey = true;
-  live = false;
-  updateUnmuteHint();
-}
-
-// ---------- Exibição com ritmo constante ----------
+// ---------- Reprodução: uma por tela aberta ----------
 //
-// Os quadros chegam pela internet em intervalos irregulares. Em vez de desenhar cada um
-// assim que chega, guardamos alguns em fila e mostramos cada quadro no horário dele
-// (timestamp de quem transmite + atraso fixo). Assim 60 fps aparecem como 60 fps uniformes.
+// Cada tela aberta tem o seu quadro, os seus decodificadores e a sua fila com ritmo constante.
+// Os quadros chegam pela internet em intervalos irregulares: em vez de desenhar cada um assim que
+// chega, guardamos alguns em fila e mostramos cada quadro no horário dele (timestamp de quem
+// transmite + uma folga). A folga cresce quando quadros chegam atrasados e volta aos poucos.
+// Só a tela escolhida para o som decodifica áudio.
 
 const PLAYOUT_MIN_US = 80_000;       // folga mínima para absorver a variação da rede
 const PLAYOUT_MAX_US = 400_000;      // folga máxima (mais que isso deixa o vídeo atrasado demais)
 const PLAYOUT_STEP_US = 20_000;
 const MAX_AHEAD_US = 250_000;        // fila maior que folga + isso = atraso acumulado: ressincroniza
-let playoutDelay = PLAYOUT_MIN_US;   // folga atual: cresce quando quadros chegam atrasados
-let lastLateAt = 0;
 const MAX_QUEUE = 30;
 
-let frameQueue = [];
-let playoutOffset = null;            // relógio local (µs) - timestamp de quem transmite
-let lastQueuedTs = -Infinity;
+const localMicros = () => performance.now() * 1000;
 
-function localMicros() {
-  return performance.now() * 1000;
-}
+class Player {
+  constructor(no) {
+    this.no = no;
+    this.el = document.createElement('div');
+    this.el.className = 'pane';
+    this.canvas = document.createElement('canvas');
+    this.canvas.width = 1280;
+    this.canvas.height = 720;
+    this.canvas.ondblclick = toggleFullscreen;
+    this.ctx = this.canvas.getContext('2d');
+    this.overlay = document.createElement('div');
+    this.overlay.className = 'overlay';
+    const top = document.createElement('div');
+    top.className = 'pane-top';
+    this.label = document.createElement('span');
+    this.label.className = 'label';
+    this.soundBtn = document.createElement('button');
+    this.soundBtn.className = 'pane-sound';
+    this.soundBtn.onclick = () => { setAudioStream(no); enableAudio(); };
+    this.closeBtn = document.createElement('button');
+    this.closeBtn.append(icon('x'));
+    this.closeBtn.title = 'Fechar esta tela';
+    this.closeBtn.onclick = () => closePlayer(no);
+    top.append(this.label, this.soundBtn, this.closeBtn);
+    this.el.append(this.canvas, this.overlay, top);
 
-function enqueueFrame(frame) {
-  // Timestamp voltou ou saltou (transmissão reiniciada): recomeça o relógio.
-  if (frame.timestamp < lastQueuedTs || frame.timestamp - lastQueuedTs > 1_000_000) resyncPlayout(frame.timestamp);
-  lastQueuedTs = frame.timestamp;
-
-  frameQueue.push(frame);
-  while (frameQueue.length > MAX_QUEUE) frameQueue.shift().close();
-
-  const due = frame.timestamp + playoutOffset;
-  const now = localMicros();
-  if (due < now) {
-    // Chegou depois do horário de aparecer: a rede oscila mais que a folga atual, e o vídeo engasga.
-    // Aumenta a folga um pouco (o vídeo fica um tiquinho mais atrasado, mas fluido).
-    lastLateAt = now;
-    if (playoutDelay < PLAYOUT_MAX_US) {
-      playoutDelay += PLAYOUT_STEP_US;
-      playoutOffset += PLAYOUT_STEP_US;
-    }
-    if (due < now - playoutDelay) resyncPlayout(frame.timestamp);   // engasgo grande: realinha de vez
-  } else if (due > now + playoutDelay + MAX_AHEAD_US) {
-    resyncPlayout(frame.timestamp);   // fila crescendo: volta para perto do ao vivo
-  } else if (playoutDelay > PLAYOUT_MIN_US && now - lastLateAt > 20_000_000) {
-    // 20 s sem atraso: reduz a folga aos poucos para voltar a ficar perto do ao vivo.
-    playoutDelay -= PLAYOUT_STEP_US / 2;
-    playoutOffset -= PLAYOUT_STEP_US / 2;
-    lastLateAt = now - 10_000_000;
+    this.cfg = null;
+    this.videoDecoder = null;
+    this.audioDecoder = null;
+    this.wantAudio = false;
+    this.seq = 0;                 // invalida verificações/tentativas assíncronas pendentes
+    this.waitingForKey = true;
+    this.live = false;
+    this.queue = [];
+    this.offset = null;           // relógio local (µs) - timestamp de quem transmite
+    this.delay = PLAYOUT_MIN_US;  // folga atual
+    this.lastLateAt = 0;
+    this.lastTs = -Infinity;
+    this.framesDrawn = 0;
+    this.showOverlay('Conectando à transmissão…');
   }
-}
 
-function resyncPlayout(ts) {
-  playoutOffset = localMicros() + playoutDelay - ts;
+  showOverlay(title, text = '') {
+    const big = document.createElement('div');
+    big.className = 'big';
+    big.textContent = title;
+    const box = document.createElement('div');
+    box.append(big, text);
+    this.overlay.replaceChildren(box);
+    this.overlay.hidden = false;
+  }
+
+  updateLabel() {
+    const s = streams.get(this.no);
+    const two = watched.length > 1;
+    const on = this.no === audioNo && !muted;
+    this.label.textContent = s?.name || '';
+    this.closeBtn.hidden = !two;
+    this.soundBtn.hidden = !two || !s?.audio;
+    this.soundBtn.replaceChildren(icon(on ? 'volume' : 'volume-off'));
+    this.soundBtn.classList.toggle('on', on);
+    this.soundBtn.title = on ? `Tocando o som de ${s?.name}` : `Ouvir ${s?.name} (a outra tela fica sem som)`;
+    this.el.classList.toggle('audio', two && on);
+  }
+
+  async configure(cfg) {
+    this.resetDecoders();
+    this.cfg = cfg;
+    const seq = this.seq;
+
+    // Nem todo navegador decodifica H.264 (ex.: Chromium sem codecs proprietários em algumas distros Linux).
+    const videoCfg = { codec: cfg.video.codec, optimizeForLatency: true };
+    const { supported } = await VideoDecoder.isConfigSupported(videoCfg).catch(() => ({ supported: false }));
+    if (seq !== this.seq) return;   // chegou outra config enquanto verificava
+    if (!supported) {
+      this.showOverlay('Seu navegador não reproduz este vídeo', 'Abra o link no Google Chrome, Microsoft Edge ou Safari.');
+      return;
+    }
+    this.videoDecoder = new VideoDecoder({
+      output: (frame) => this.enqueue(frame),
+      error: (e) => {
+        // Decoder com erro fica fechado: recria e espera o próximo quadro-chave.
+        console.error('VideoDecoder', e);
+        if (seq === this.seq) setTimeout(() => seq === this.seq && this.configure(cfg), 500);
+      },
+    });
+    this.videoDecoder.configure(videoCfg);
+    this.setAudio(this.wantAudio);
+  }
+
+  /** Liga ou desliga o som desta tela. */
+  setAudio(on) {
+    this.wantAudio = on;
+    const should = on && !!this.cfg?.audio && 'AudioDecoder' in window;
+    if (should && !this.audioDecoder) {
+      this.audioDecoder = new AudioDecoder({ output: playAudio, error: (e) => console.error('AudioDecoder', e) });
+      this.audioDecoder.configure(this.cfg.audio);
+    } else if (!should && this.audioDecoder) {
+      if (this.audioDecoder.state !== 'closed') this.audioDecoder.close();
+      this.audioDecoder = null;
+    }
+    updateUnmuteHint();
+  }
+
+  onPacket(kind, key, timestamp, data) {
+    if (kind === KIND_VIDEO) {
+      const d = this.videoDecoder;
+      if (!d || d.state !== 'configured') return;
+      if (this.waitingForKey && !key) return;
+      this.waitingForKey = false;
+      // Se o computador de quem assiste não der conta, pula até o próximo quadro-chave.
+      if (d.decodeQueueSize > 30) { this.waitingForKey = true; return; }
+      d.decode(new EncodedVideoChunk({ type: key ? 'key' : 'delta', timestamp, data }));
+    } else if (kind === KIND_AUDIO) {
+      const d = this.audioDecoder;
+      if (!d || d.state !== 'configured') return;
+      d.decode(new EncodedAudioChunk({ type: 'key', timestamp, data }));
+    }
+  }
+
+  enqueue(frame) {
+    // Timestamp voltou ou saltou (transmissão reiniciada): recomeça o relógio.
+    if (frame.timestamp < this.lastTs || frame.timestamp - this.lastTs > 1_000_000) this.resync(frame.timestamp);
+    this.lastTs = frame.timestamp;
+    this.queue.push(frame);
+    while (this.queue.length > MAX_QUEUE) this.queue.shift().close();
+
+    const due = frame.timestamp + this.offset;
+    const now = localMicros();
+    if (due < now) {
+      // Chegou depois do horário de aparecer: a rede oscila mais que a folga atual, e o vídeo engasga.
+      // Aumenta a folga um pouco (o vídeo fica um tiquinho mais atrasado, mas fluido).
+      this.lastLateAt = now;
+      if (this.delay < PLAYOUT_MAX_US) {
+        this.delay += PLAYOUT_STEP_US;
+        this.offset += PLAYOUT_STEP_US;
+      }
+      if (due < now - this.delay) this.resync(frame.timestamp);   // engasgo grande: realinha de vez
+    } else if (due > now + this.delay + MAX_AHEAD_US) {
+      this.resync(frame.timestamp);   // fila crescendo: volta para perto do ao vivo
+    } else if (this.delay > PLAYOUT_MIN_US && now - this.lastLateAt > 20_000_000) {
+      // 20 s sem atraso: reduz a folga aos poucos para voltar a ficar perto do ao vivo.
+      this.delay -= PLAYOUT_STEP_US / 2;
+      this.offset -= PLAYOUT_STEP_US / 2;
+      this.lastLateAt = now - 10_000_000;
+    }
+  }
+
+  resync(ts) {
+    this.offset = localMicros() + this.delay - ts;
+  }
+
+  /** Mostra o quadro mais recente cujo horário já chegou; descarta os que ficaram para trás. */
+  draw() {
+    if (!this.queue.length || this.offset === null) return;
+    const streamNow = localMicros() - this.offset;
+    let show = null;
+    while (this.queue.length && this.queue[0].timestamp <= streamNow) {
+      show?.close();
+      show = this.queue.shift();
+    }
+    if (!show) return;
+    const c = this.canvas;
+    if (c.width !== show.displayWidth || c.height !== show.displayHeight) {
+      c.width = show.displayWidth;
+      c.height = show.displayHeight;
+    }
+    this.ctx.drawImage(show, 0, 0);
+    show.close();
+    this.framesDrawn++;
+    if (!this.live) {
+      this.live = true;
+      this.overlay.hidden = true;
+    }
+  }
+
+  clearQueue() {
+    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);   // não deixa a imagem anterior
+    for (const f of this.queue) f.close();
+    this.queue = [];
+    this.offset = null;
+    this.lastTs = -Infinity;
+  }
+
+  resetDecoders() {
+    this.clearQueue();
+    this.seq++;
+    for (const d of [this.videoDecoder, this.audioDecoder]) {
+      if (d && d.state !== 'closed') d.close();
+    }
+    this.videoDecoder = this.audioDecoder = null;
+    this.waitingForKey = true;
+    this.live = false;
+    updateUnmuteHint();
+  }
+
+  destroy() {
+    this.resetDecoders();
+    this.cfg = null;
+    this.el.remove();
+    updateUnmuteHint();
+  }
 }
 
 function renderLoop() {
   requestAnimationFrame(renderLoop);
-  if (!frameQueue.length || playoutOffset === null) return;
-
-  // Mostra o quadro mais recente cujo horário já chegou; descarta os que ficaram para trás.
-  const streamNow = localMicros() - playoutOffset;
-  let show = null;
-  while (frameQueue.length && frameQueue[0].timestamp <= streamNow) {
-    show?.close();
-    show = frameQueue.shift();
-  }
-  if (!show) return;
-
-  if (canvas.width !== show.displayWidth || canvas.height !== show.displayHeight) {
-    canvas.width = show.displayWidth;
-    canvas.height = show.displayHeight;
-  }
-  ctx2d.drawImage(show, 0, 0);
-  show.close();
-  framesDrawn++;
-  if (!live) {
-    live = true;
-    $('overlay').hidden = true;
-  }
+  for (const p of players.values()) p.draw();
 }
 requestAnimationFrame(renderLoop);
 
-function clearFrameQueue() {
-  ctx2d.clearRect(0, 0, canvas.width, canvas.height);   // não deixa a imagem da tela anterior
-  for (const f of frameQueue) f.close();
-  frameQueue = [];
-  playoutOffset = null;
-  lastQueuedTs = -Infinity;
-}
+setInterval(() => {
+  const ps = [...players.values()];
+  $('info').textContent = ps.filter((p) => p.live)
+    .map((p) => `${p.canvas.width}×${p.canvas.height} · ${Math.round(p.framesDrawn / 2)} fps`).join('   ');
+  $('info').title = ps.map((p) => `Folga contra oscilação da rede: ${Math.round(p.delay / 1000)} ms`).join('\n');
+  for (const p of ps) p.framesDrawn = 0;
+}, 2000);
 
 // ---------- Áudio ----------
 
@@ -700,8 +798,9 @@ function enableAudio() {
 let savedVolumes = {};
 try { savedVolumes = JSON.parse(localStorage.getItem('gamestream-volumes') || '{}'); } catch { /* sem armazenamento */ }
 
+/** Nome de quem está na tela que toca som. */
 function watchedName() {
-  return watching !== null ? streams.get(watching)?.name || '' : '';
+  return audioNo !== null ? streams.get(audioNo)?.name || '' : '';
 }
 
 function loadVolumeForWatched() {
@@ -718,7 +817,7 @@ function applyVolume() {
 
 // O aviso "clique para ativar o som" só aparece quando a tela aberta tem áudio para tocar.
 function updateUnmuteHint() {
-  $('unmute').hidden = !muted || !audioDecoder;
+  $('unmute').hidden = !muted || ![...players.values()].some((p) => p.audioDecoder);
 }
 
 function setMuted(value) {
@@ -727,6 +826,7 @@ function setMuted(value) {
   updateUnmuteHint();
   const name = watchedName();
   setLabel($('muteBtn'), muted ? 'volume-off' : 'volume', muted ? 'Som desligado' : name ? `Som de ${name}` : 'Som ligado');
+  for (const p of players.values()) p.updateLabel();
   renderTiles();   // atualiza os alto-falantes das miniaturas
 }
 
@@ -749,10 +849,9 @@ $('volume').oninput = () => {
 
 function toggleFullscreen() {
   if (document.fullscreenElement) document.exitFullscreen();
-  else if (watching !== null) $('stage').requestFullscreen().catch(() => {});
+  else if (watched.length) $('stage').requestFullscreen().catch(() => {});
 }
 $('fullscreen').onclick = toggleFullscreen;
-canvas.ondblclick = toggleFullscreen;
 
 // ---------- Compartilhar a minha tela ----------
 //
