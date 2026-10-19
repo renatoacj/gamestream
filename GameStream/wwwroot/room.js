@@ -16,6 +16,10 @@ const IN_APP = params.get('app') === '1';
 const MY_DEVICE = params.get('dev') || '';
 const NAME_FROM_APP = (params.get('name') || '').trim().slice(0, 24);
 if (EMBEDDED || IN_APP) document.body.classList.add('embedded');
+// Dentro do app, o som é tocado pelo próprio GameStream.exe (ver RoomAudioPlayer.cs): o WebView2 toca áudio
+// num processo dele, que programas de mixagem por aplicativo (MixLine, Voicemeeter) não reconhecem como o app.
+// A página só avisa qual tela toca som, com que volume.
+const NATIVE_AUDIO = (EMBEDDED || IN_APP) && window.parent !== window;
 
 const HEADER = 12;            // [tipo][flags][transmissão u16][timestamp f64]
 const KIND_VIDEO = 1, KIND_AUDIO = 2, KIND_THUMB = 3;
@@ -300,6 +304,18 @@ function setAudioStream(no) {
   setMuted(muted);          // atualiza o botão de som com o nome
 }
 
+/** No app: avisa o GameStream qual tela toca som (ele mesmo toca). */
+let lastAudioReport = '';
+function reportAudio() {
+  if (!NATIVE_AUDIO) return;
+  const p = audioNo !== null ? players.get(audioNo) : null;
+  const msg = { gs: 'audio', stream: p?.cfg?.audio ? audioNo : null, volume: Number($('volume').value), muted };
+  const key = JSON.stringify(msg);
+  if (key === lastAudioReport) return;
+  lastAudioReport = key;
+  window.parent.postMessage(msg, '*');
+}
+
 function backToList() {
   for (const no of [...watched]) closePlayer(no, false);
   autoWatch = false;
@@ -459,7 +475,7 @@ function renderTiles() {
     // Alto-falante: só uma tela toca som. O ícone mostra qual está tocando;
     // clicar ativa o som desta tela (silenciando as outras) ou silencia a que está tocando.
     if (s.audio) {
-      const playing = s.no === audioNo && !muted && audioCtx?.state === 'running';
+      const playing = s.no === audioNo && !muted && audioReady();
       const speaker = document.createElement('button');
       speaker.className = 'speaker' + (playing ? ' on' : '');
       speaker.append(icon(playing ? 'volume' : 'volume-off'));
@@ -599,12 +615,13 @@ class Player {
     });
     this.videoDecoder.configure(videoCfg);
     this.setAudio(this.wantAudio);
+    reportAudio();   // agora se sabe se esta tela tem som
   }
 
   /** Liga ou desliga o som desta tela. */
   setAudio(on) {
     this.wantAudio = on;
-    const should = on && !!this.cfg?.audio && 'AudioDecoder' in window;
+    const should = !NATIVE_AUDIO && on && !!this.cfg?.audio && 'AudioDecoder' in window;
     if (should && !this.audioDecoder) {
       this.audioDecoder = new AudioDecoder({ output: playAudio, error: (e) => console.error('AudioDecoder', e) });
       this.audioDecoder.configure(this.cfg.audio);
@@ -774,7 +791,15 @@ function playAudio(data) {
   }
 }
 
+/** O som pode tocar? No app quem toca é o GameStream.exe; no navegador, depois do primeiro clique. */
+const audioReady = () => NATIVE_AUDIO || audioCtx?.state === 'running';
+
 function enableAudio() {
+  if (NATIVE_AUDIO) {
+    // No app não abre áudio no WebView2 (ficaria uma entrada muda a mais nos mixers).
+    setMuted(false);
+    return;
+  }
   if (!audioCtx) {
     audioCtx = new AudioContext({ latencyHint: 'interactive' });
     gainNode = audioCtx.createGain();
@@ -813,11 +838,12 @@ function applyVolume() {
   const v = Number($('volume').value);
   $('volumeLabel').textContent = Math.round(v * 100) + '%';
   if (gainNode) gainNode.gain.value = muted ? 0 : v;
+  reportAudio();
 }
 
 // O aviso "clique para ativar o som" só aparece quando a tela aberta tem áudio para tocar.
 function updateUnmuteHint() {
-  $('unmute').hidden = !muted || ![...players.values()].some((p) => p.audioDecoder);
+  $('unmute').hidden = NATIVE_AUDIO || !muted || ![...players.values()].some((p) => p.audioDecoder);
 }
 
 function setMuted(value) {
@@ -832,17 +858,17 @@ function setMuted(value) {
 
 // O navegador só libera áudio depois de uma interação: qualquer clique na página já ativa o som.
 document.addEventListener('pointerdown', (e) => {
-  if ((!audioCtx || audioCtx.state !== 'running') && e.target.id !== 'muteBtn') enableAudio();
+  if (!audioReady() && e.target.id !== 'muteBtn') enableAudio();
 }, { capture: true });
 $('unmute').onclick = enableAudio;
-$('muteBtn').onclick = () => (muted || !audioCtx ? enableAudio() : setMuted(true));
+$('muteBtn').onclick = () => (muted || !audioReady() ? enableAudio() : setMuted(true));
 $('volume').oninput = () => {
   const name = watchedName();
   if (name) {
     savedVolumes[name] = Number($('volume').value);
     try { localStorage.setItem('gamestream-volumes', JSON.stringify(savedVolumes)); } catch { /* sem armazenamento */ }
   }
-  if (!audioCtx) enableAudio();
+  if (!audioReady()) enableAudio();
   else if (muted) setMuted(false);
   else applyVolume();
 };

@@ -103,6 +103,9 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
     /// <summary>Publica o endereço atual das salas salvas, para o código fixo continuar valendo.</summary>
     private readonly RoomDirectory _directory;
 
+    /// <summary>Toca no próprio app o som da tela escolhida na sala (ver <see cref="RoomAudioPlayer"/>).</summary>
+    public RoomAudioPlayer Audio { get; } = new();
+
     private const int MaxWrongPins = 30;                        // tentativas erradas toleradas…
     private static readonly TimeSpan PinWindow = TimeSpan.FromMinutes(5);   // …neste intervalo, antes de bloquear
     private readonly object _pinLock = new();
@@ -351,6 +354,7 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
             if (client == null) return Results.Json(new { error }, statusCode: 400);
 
             await LeaveJoinedRoomAsync();
+            client.Audio = Audio;
             client.PublishRejected += reason => _ = Broadcaster.StopWithMessageAsync(reason);
             Joined = client;
             await Broadcaster.SetSinkAsync(client);
@@ -426,6 +430,19 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
                 .Where(RoomIds.IsGuid).Distinct().Take(50).ToArray() ?? [];
             _savedRoomKeys = guids.Select(RoomIds.ViewKey).ToArray();
             _directory.SetRooms(guids);
+            return Results.Ok();
+        });
+
+        // A página da sala (dentro do app) avisa qual tela toca som; o app toca (ver RoomAudioPlayer).
+        app.MapPost("/api/listen", async (HttpContext ctx) =>
+        {
+            if (!IsHost(ctx)) return Results.Unauthorized();
+            var body = await ctx.Request.ReadFromJsonAsync<JsonObject>();
+            ushort? stream = body?["stream"] is JsonValue sv && sv.TryGetValue<int>(out var n) && n is >= 0 and <= ushort.MaxValue ? (ushort)n : null;
+            var volume = body?["volume"] is JsonValue vv && vv.TryGetValue<double>(out var v) ? (float)v : 1f;
+            var muted = body?["muted"] is JsonValue mv && mv.TryGetValue<bool>(out var m) && m;
+            Joined?.Listen(stream);
+            Audio.Listen(stream, volume, muted);
             return Results.Ok();
         });
 
@@ -511,6 +528,7 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
         if (Broadcaster != null) await Broadcaster.SetSinkAsync(this);
         Joined?.Dispose();
         Joined = null;
+        Audio.Listen(null, 1, false);
     }
 
     // Pelo túnel as requisições também chegam de 127.0.0.1, por isso o token é obrigatório.
@@ -590,6 +608,7 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
         var needKey = false;
         // O mesmo cadeado de StartWatching: quem começa a assistir recebe o trecho guardado
         // e, em seguida, exatamente os pacotes seguintes (sem buraco nem repetição).
+        if (!isVideo && Joined == null) Audio.OnPacket(packet);   // som da minha sala, tocado pelo app
         lock (stream.Sync)
         {
             if (isVideo) stream.Remember(packet, isKey);
@@ -780,7 +799,10 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
             case "watch":
                 if (StreamNo() is { } w && _streams.TryGetValue(w, out var toWatch) && toWatch.OwnerId != me.Id)
                 {
-                    me.StartWatching(toWatch);
+                    // audioOnly: o app de quem entrou toca o som sozinho (o vídeo vem pela página da sala).
+                    var audioOnly = msg["audioOnly"] is JsonValue ao && ao.TryGetValue<bool>(out var b) && b;
+                    me.StartWatching(toWatch, audioOnly);
+                    if (audioOnly) break;
                     if (toWatch.OwnerId != "" && toWatch.ShouldRequestKeyframe() && _people.TryGetValue(toWatch.OwnerId, out var owner))
                         owner.EnqueueText("""{"type":"keyframe"}""");
                 }
@@ -906,6 +928,7 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
     public async ValueTask DisposeAsync()
     {
         _directory.Dispose();
+        Audio.Dispose();
         if (_app != null)
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
@@ -993,6 +1016,7 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
         // Transmissões que este participante está assistindo → "esperando quadro-chave?".
         // Um decodificador só consegue começar num quadro-chave.
         private readonly ConcurrentDictionary<ushort, bool> _watching = new();
+        private readonly ConcurrentDictionary<ushort, byte> _audioOnly = new();   // telas em que só recebe o som
 
         // Controle de taxa do que ele envia.
         private long _windowStart = Environment.TickCount64;
@@ -1021,8 +1045,16 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
             if (Interlocked.Read(ref _queuedBytes) <= BacklogLimit) Enqueue(packet, false, droppable: true);
         }
 
-        public void StartWatching(RoomStream stream)
+        public void StartWatching(RoomStream stream, bool audioOnly = false)
         {
+            if (audioOnly)
+            {
+                _audioOnly[stream.No] = 0;
+                _watching[stream.No] = false;
+                EnqueueText(stream.ConfigMessage);
+                return;
+            }
+            _audioOnly.TryRemove(stream.No, out _);
             lock (stream.Sync)
             {
                 EnqueueText(stream.ConfigMessage);
@@ -1033,18 +1065,27 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
             }
         }
 
-        public void StopWatching(ushort no) => _watching.TryRemove(no, out _);
+        public void StopWatching(ushort no)
+        {
+            _watching.TryRemove(no, out _);
+            _audioOnly.TryRemove(no, out _);
+        }
 
         /// <summary>A transmissão mudou de formato: quem assiste recebe a config nova e recomeça num quadro-chave.</summary>
         public void SendConfigIfWatching(RoomStream stream)
         {
-            if (_watching.ContainsKey(stream.No)) StartWatching(stream);
+            if (_watching.ContainsKey(stream.No)) StartWatching(stream, _audioOnly.ContainsKey(stream.No));
         }
 
         /// <summary>Enfileira um pacote se este participante assiste à transmissão. Retorna true se ele precisa de um quadro-chave.</summary>
         public bool OfferMedia(ushort no, byte[] packet, bool isVideo, bool isKey)
         {
             if (!_watching.TryGetValue(no, out var waitingForKey)) return false;
+            if (_audioOnly.ContainsKey(no))
+            {
+                if (!isVideo) Enqueue(packet, isText: false, droppable: true);
+                return false;
+            }
             if (waitingForKey)
             {
                 if (!isVideo || !isKey) return isVideo;
