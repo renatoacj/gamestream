@@ -425,7 +425,12 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
         // Preferências do app: fechar para a bandeja e iniciar com o Windows.
         app.MapGet("/api/app-settings", (HttpContext ctx) =>
             IsHost(ctx)
-                ? Results.Json(new { closeToTray = AppSettings.Current.CloseToTray, startWithWindows = AppSettings.StartWithWindows })
+                ? Results.Json(new
+                {
+                    closeToTray = AppSettings.Current.CloseToTray,
+                    startWithWindows = AppSettings.StartWithWindows,
+                    name = AppSettings.Current.Name,
+                })
                 : Results.Unauthorized());
 
         app.MapPost("/api/app-settings", async (HttpContext ctx) =>
@@ -435,6 +440,12 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
             if (body?["closeToTray"]?.GetValue<bool>() is { } tray)
             {
                 AppSettings.Current.CloseToTray = tray;
+                AppSettings.Current.Save();
+            }
+            if (body?["name"]?.GetValue<string>() is { } name)
+            {
+                var clean = new string(name.Where(ch => !char.IsControl(ch)).ToArray()).Trim();
+                AppSettings.Current.Name = clean.Length > 24 ? clean[..24] : clean;
                 AppSettings.Current.Save();
             }
             if (body?["startWithWindows"]?.GetValue<bool>() is { } autostart)
