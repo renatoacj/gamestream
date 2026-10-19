@@ -35,6 +35,26 @@
   /* Tela expandida */
   .stage { flex: 1; min-height: 120px; position: relative; background: #000; }
   .stage canvas { width: 100%; height: 100%; object-fit: contain; display: block; }
+  /* Uma tela, ou duas lado a lado */
+  .panes { position: absolute; inset: 0; display: grid; grid-template-columns: 1fr; gap: 2px; background: #000; }
+  .panes.two { grid-template-columns: 1fr 1fr; }
+  .pane { position: relative; min-width: 0; min-height: 0; background: #000; }
+  .pane.audio { box-shadow: inset 0 0 0 2px rgba(62, 207, 142, .55); }
+  .pane-top {
+    position: absolute; left: 10px; bottom: 10px; right: 10px; display: flex; gap: 6px; align-items: center;
+    opacity: 0; transition: opacity .2s; pointer-events: none;
+  }
+  .pane:hover .pane-top, .pane-top:focus-within { opacity: 1; }
+  .pane-top > * { pointer-events: auto; background: rgba(15, 17, 21, .8); backdrop-filter: blur(6px); }
+  .pane-top .label { padding: 4px 10px; border-radius: 8px; border: 1px solid var(--border); font-weight: 600; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pane-top button { padding: 0; width: 28px; height: 28px; }
+  .pane-top .pane-sound.on { color: var(--ok); border-color: rgba(62, 207, 142, .5); }
+  /* Aviso de que a minha tela está sendo transmitida (ela mesma não aparece na sala) */
+  .sharing-badge {
+    display: inline-flex; align-items: center; gap: 7px; padding: 3px 10px; border-radius: 999px; white-space: nowrap;
+    font-size: 12px; font-weight: 600; color: var(--live); background: rgba(255, 77, 94, .1); border: 1px solid rgba(255, 77, 94, .45);
+  }
+  .sharing-badge::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--live); animation: pulse 1.4s infinite; }
   .overlay {
     position: absolute; inset: 0; display: grid; place-items: center;
     text-align: center; color: var(--muted); padding: 16px; pointer-events: none;
@@ -86,18 +106,6 @@
     color: #fff; font-size: 14px; font-weight: 600; opacity: 0; transition: opacity .15s;
   }
   .tile:not(.mine):not(.selected):hover .expand-hint { opacity: 1; }
-  /* A própria tela fica só em miniatura (atualizada a cada poucos segundos) para poupar o PC de quem
-     transmite. Sem este aviso, a imagem parada parece uma transmissão travada. */
-  .tile.paused .thumb img { filter: brightness(.45); }
-  .tile .paused-tag {
-    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); max-width: 90%;
-    display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px;
-    background: rgba(15, 17, 21, .85); border: 1px solid var(--border-strong); color: var(--text);
-    font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
-  .tile .paused-tag::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--live); flex: none; animation: pulse 1.4s infinite; }
-  .tile.paused:hover .paused-tag { display: none; }
-  .tiles.strip .tile .paused-tag { font-size: 10px; padding: 2px 7px; }
   .tile .meta { display: flex; align-items: center; gap: 6px; min-width: 0; }
   .tile .meta b { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
   .tile .meta small { color: var(--muted); font-size: 11px; white-space: nowrap; }
@@ -177,19 +185,16 @@
 <body>
 <header class="topbar">
   <b id="roomTitle" class="room-title">Sala</b>
+  <span id="sharingBadge" class="sharing-badge" hidden>Sua tela está sendo transmitida</span>
   <div class="people" id="people"></div>
   <button id="nameBtn" data-icon="pencil" title="Mudar meu nome"><span id="myName">…</span></button>
 </header>
 
 <main>
   <section class="stage" id="stage" hidden>
-    <canvas id="screen" width="1280" height="720"></canvas>
-    <div class="overlay" id="overlay">
-      <div><div class="big" id="overlayTitle"></div><div id="overlayText"></div></div>
-    </div>
+    <div class="panes" id="panes"></div>
     <div class="stage-top">
       <button id="backBtn" data-icon="arrow-left" title="Voltar para a lista de telas">Todas as telas</button>
-      <span class="label" id="stageName"></span>
     </div>
     <button id="unmute" data-icon="volume" hidden>Clique para ativar o som</button>
   </section>
