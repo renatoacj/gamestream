@@ -337,6 +337,9 @@ public sealed partial class RoomClient : IRoomSink, IDisposable
                 case "expired":
                     Message = "Este código não vale mais: quem criou a sala gerou um novo.";
                     return true;
+                case "ping":
+                    SendText(new JsonObject { ["type"] = "pong" });
+                    break;
                 case "removed":
                     _config = null;
                     Message = "Você foi removido da sala por quem a criou.";
