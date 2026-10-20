@@ -85,7 +85,7 @@
   .stage-bottom:empty { display: none; }   /* fora da tela cheia os controles ficam na barra de baixo */
   .stage-bottom .sound-controls { flex-wrap: wrap; justify-content: flex-end; }
   .stage:has(.stage-bottom .sound-controls) #unmute { bottom: 84px; }
-  .stage-bottom #volumeLabel { color: #fff; }
+  .stage-bottom .vol-num { color: #fff; }
   #unmute {
     position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
     background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600;
@@ -131,7 +131,15 @@
   .tile .kick .icon, .tile .speaker .icon { width: 14px; height: 14px; }
   .tile .kick:hover { color: var(--live); }
   .tile .speaker.on { color: var(--ok); border-color: rgba(62, 207, 142, .5); }
-  #volumeLabel { display: inline-block; width: 42px; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; }
+  /* Porcentagem do volume: parece texto, mas dá para clicar e digitar */
+  .vol-num { display: inline-flex; align-items: center; font-size: 12px; color: var(--muted); }
+  #volumeLabel {
+    width: 44px; padding: 2px 3px; text-align: right; font: inherit; font-variant-numeric: tabular-nums; color: inherit;
+    background: transparent; border: 1px solid transparent; border-radius: 6px; appearance: textfield; -moz-appearance: textfield;
+  }
+  #volumeLabel::-webkit-inner-spin-button, #volumeLabel::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+  #volumeLabel:hover { border-color: var(--border-strong); }
+  #volumeLabel:focus { outline: none; border-color: var(--accent); background: var(--panel-2); color: var(--text); }
   .bar label { display: flex; align-items: center; gap: 6px; }
   .tiles.strip .tile { padding: 4px; gap: 2px; }
   .tiles.strip .tile .live-tag { font-size: 9px; padding: 0 4px; top: 4px; left: 4px; }
@@ -234,7 +242,7 @@
   <div class="sound-controls" id="soundControls">
     <button id="muteBtn" data-icon="volume-off" title="Ligar/desligar o som">Som desligado</button>
     <label title="Volume desta tela (lembrado por pessoa). Acima de 100% aumenta o som de quem transmite baixo.">
-      <input type="range" id="volume" min="0" max="4" step="0.05" value="1"><span id="volumeLabel" class="muted">100%</span>
+      <input type="range" id="volume" min="0" max="4" step="0.05" value="1"><span class="vol-num"><input type="number" id="volumeLabel" min="0" max="400" step="5" value="100" title="Volume em % (digite um valor de 0 a 400)">%</span>
     </label>
     <button id="fullscreen" data-icon="maximize">Tela cheia</button>
   </div>

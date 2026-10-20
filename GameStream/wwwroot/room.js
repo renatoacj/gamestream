@@ -843,7 +843,7 @@ function loadVolumeForWatched() {
 
 function applyVolume() {
   const v = Number($('volume').value);
-  $('volumeLabel').textContent = Math.round(v * 100) + '%';
+  if (document.activeElement !== $('volumeLabel')) $('volumeLabel').value = Math.round(v * 100);
   if (gainNode) gainNode.gain.value = muted ? 0 : v;
   reportAudio();
 }
@@ -869,7 +869,20 @@ document.addEventListener('pointerdown', (e) => {
 }, { capture: true });
 $('unmute').onclick = enableAudio;
 $('muteBtn').onclick = () => (muted || !audioReady() ? enableAudio() : setMuted(true));
-$('volume').oninput = () => {
+$('volume').oninput = volumeChanged;
+
+// A porcentagem também pode ser digitada (0 a 400%); Enter ou sair do campo aplica.
+function typedVolume() {
+  const n = Number(String($('volumeLabel').value).replace(',', '.'));
+  if (!Number.isFinite(n)) { applyVolume(); return; }
+  $('volume').value = Math.min(400, Math.max(0, n)) / 100;
+  volumeChanged();
+  $('volumeLabel').value = Math.round(Number($('volume').value) * 100);
+}
+$('volumeLabel').onchange = typedVolume;
+$('volumeLabel').onkeydown = (e) => { if (e.key === 'Enter') { typedVolume(); $('volumeLabel').blur(); } };
+
+function volumeChanged() {
   const name = watchedName();
   if (name) {
     savedVolumes[name] = Number($('volume').value);
@@ -878,7 +891,7 @@ $('volume').oninput = () => {
   if (!audioReady()) enableAudio();
   else if (muted) setMuted(false);
   else applyVolume();
-};
+}
 
 function toggleFullscreen() {
   if (document.fullscreenElement) document.exitFullscreen();

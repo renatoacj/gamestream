@@ -371,8 +371,17 @@ public sealed partial class RoomClient : IRoomSink, IDisposable
 
     public void PublishConfig(JsonObject config)
     {
+        var previous = _config;
         _config = config;
-        if (_connected) SendPublish(config);
+        if (!_connected) return;
+        if (previous != null)
+        {
+            // Trocou de janela/monitor sem parar: o mesmo formato continua no mesmo compartilhamento (a sala só vê a
+            // imagem mudar). Formato diferente (ex.: o áudio ligou ou desligou): encerra e compartilha de novo.
+            if (JsonNode.DeepEquals(previous, config)) return;
+            SendText(new JsonObject { ["type"] = "unpublish" });
+        }
+        SendPublish(config);
     }
 
     public void PublishMedia(byte[] packet, bool isVideo, bool isKey)

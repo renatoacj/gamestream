@@ -183,8 +183,10 @@ function renderPicker() {
     detail.textContent = `${s.detail} · ${s.width}×${s.height}`;
     card.append(thumb, name, detail);
     card.onclick = () => {
+      const changed = s.id !== $('source').value;
       selectSource(s);
       $('picker').close();
+      if (changed && lastStatus?.state === 'live') switchSource();
     };
     grid.append(card);
   }
@@ -252,6 +254,17 @@ async function start() {
   savePrefs();
   $('startBtn').disabled = true;
   await fetch(api('start'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settingsForServer()),
+  });
+  refresh();
+}
+
+/** Troca a janela/monitor durante a transmissão: quem assiste só vê a imagem mudar. */
+async function switchSource() {
+  savePrefs();
+  await fetch(`${api('start')}&switch=1`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(settingsForServer()),
@@ -367,7 +380,10 @@ async function refresh() {
   $('startBtn').hidden = live;
   $('startBtn').disabled = busy;
   $('stopBtn').hidden = !live;
-  for (const el of [...settingEls(), $('sourceBtn'), $('profilePreset')]) el.disabled = live || busy;
+  for (const el of [...settingEls(), $('profilePreset')]) el.disabled = live || busy;
+  // A janela/monitor pode ser trocada durante a transmissão, sem parar.
+  $('sourceBtn').disabled = busy;
+  $('sourceBtn').title = live ? 'Trocar a janela ou monitor (a transmissão continua)' : 'Escolher o que transmitir';
   $('settingsLocked').hidden = !(live || busy);
   $('liveBadge').classList.toggle('live', live);
   $('liveText').textContent = live ? 'AO VIVO' : 'OFFLINE';
