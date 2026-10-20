@@ -302,6 +302,9 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
 
         MapHostApi(app);
         // O app de um convidado confere a chave antes de insistir na conexão: 204 = vale, 401 = código/link errado.
+        // Versão do app desta sala (pública): quem entra pelo app avisa quando as versões são diferentes.
+        app.MapGet("/api/version", () => Results.Json(new { version = AppVersion.Current }));
+
         // 204 = pode entrar; 423 = a sala existe mas está fechada (vai reabrir); 401 = chave errada.
         app.MapGet("/api/check", (HttpContext ctx) => CheckViewerKey(ctx.Request.Query["k"]) switch
         {
@@ -352,12 +355,14 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
                 publicUrl = publicUrl == null ? null : $"{publicUrl}/?k={ViewKey}",
                 tunnelStatus = Tunnel?.Status ?? "Desativado",
                 code = RoomCode,
-                roomUrl = $"/?embedded=1&t={HostToken}",
+                roomUrl = $"/?embedded=1&t={HostToken}&ver={AppVersion.Current}",
+                version = AppVersion.Current,
                 joined = Joined == null ? null : new
                 {
                     state = Joined.State,
                     message = Joined.Message,
                     reason = Joined.Reason,
+                    hostVersion = Joined.HostVersion,
                     roomUrl = Joined.RoomPageUrl,
                     origin = Joined.Origin,
                     hostName = Joined.HostName,
@@ -544,6 +549,34 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
             return Results.Ok();
         });
 
+        // Dados da interface guardados pelo app (ver AppSettings.Store).
+        app.MapGet("/api/store", (HttpContext ctx) =>
+        {
+            if (!IsHost(ctx)) return Results.Unauthorized();
+            lock (AppSettings.Current.Store) return Results.Json(new Dictionary<string, string>(AppSettings.Current.Store));
+        });
+
+        app.MapPost("/api/store", async (HttpContext ctx) =>
+        {
+            if (!IsHost(ctx)) return Results.Unauthorized();
+            var body = await ctx.Request.ReadFromJsonAsync<JsonObject>();
+            if (body == null) return Results.BadRequest();
+            var store = AppSettings.Current.Store;
+            lock (store)
+            {
+                foreach (var (key, node) in body)
+                {
+                    if (!StoreKeyPattern().IsMatch(key)) continue;
+                    if (node is null) { store.Remove(key); continue; }
+                    if (node is not JsonValue v || !v.TryGetValue<string>(out var value) || value.Length > 256 * 1024) continue;
+                    if (store.Count >= 40 && !store.ContainsKey(key)) continue;
+                    store[key] = value;
+                }
+            }
+            AppSettings.Current.Save();
+            return Results.Ok();
+        });
+
         app.MapPost("/api/open-log", (HttpContext ctx) =>
         {
             if (!IsHost(ctx)) return Results.Unauthorized();
@@ -684,7 +717,7 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
     {
         var people = new JsonArray();
         foreach (var p in _people.Values.Where(p => !IsHiddenCompanion(p)).OrderBy(p => p.JoinedAt))
-            people.Add(new JsonObject { ["id"] = p.Id, ["name"] = p.Name, ["host"] = p.IsHost });
+            people.Add(new JsonObject { ["id"] = p.Id, ["name"] = p.Name, ["host"] = p.IsHost, ["v"] = p.Version });
 
         var streams = new JsonArray();
         foreach (var s in _streams.Values.OrderBy(s => s.No))
@@ -815,6 +848,12 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
     [GeneratedRegex(@"^[0-9]{6}$")]
     private static partial Regex PinPattern();
 
+    [GeneratedRegex(@"^\d{1,3}\.\d{1,3}\.\d{1,3}$")]
+    private static partial Regex VersionPattern();
+
+    [GeneratedRegex(@"^gamestream-[a-z0-9-]{1,40}$")]
+    private static partial Regex StoreKeyPattern();
+
     [GeneratedRegex(@"^(avc1\.[0-9a-fA-F]{6}|vp8|vp09\.\d\d\.\d\d\.\d\d|av01\.[0-9A-Za-z.]{5,24})$")]
     private static partial Regex VideoCodecPattern();
 
@@ -829,8 +868,9 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
 
         switch (Str("type"))
         {
-            case "hello":   // entrou: a primeira mensagem já traz o nome
+            case "hello":   // entrou: a primeira mensagem já traz o nome (e a versão do app, se veio do app)
             case "name":    // trocou de nome
+                if (Str("version") is { } version && VersionPattern().IsMatch(version)) me.Version = version;
                 me.Name = CleanName(Str("name"), me.IsHost);
                 BroadcastRoom();
                 break;
@@ -1086,6 +1126,9 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
         public long LastSeen => Interlocked.Read(ref _lastSeen);
         private long _lastSeen = Environment.TickCount64;
         public void Seen() => Interlocked.Exchange(ref _lastSeen, Environment.TickCount64);
+
+        /// <summary>Versão do app de quem entrou ("" no navegador ou em versões que não informam).</summary>
+        public string Version { get; set; } = "";
 
         /// <summary>Respondeu a um ping: versão que sabe responder (só essas são removidas por silêncio).</summary>
         public volatile bool AnswersPing;
