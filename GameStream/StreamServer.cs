@@ -829,14 +829,14 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
 
         switch (Str("type"))
         {
-            case "hello":
-            case "pong":
-                me.AnswersPing = true;
-                break;
-
-            case "name":
+            case "hello":   // entrou: a primeira mensagem já traz o nome
+            case "name":    // trocou de nome
                 me.Name = CleanName(Str("name"), me.IsHost);
                 BroadcastRoom();
+                break;
+
+            case "pong":
+                me.AnswersPing = true;
                 break;
 
             case "watch":
