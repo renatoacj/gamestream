@@ -209,6 +209,34 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
         _port = port;
         _webRoot = webRoot;
         _directory = new RoomDirectory(() => Tunnel?.Url);
+        _ = PingLoopAsync(_life.Token);
+    }
+
+    private readonly CancellationTokenSource _life = new();
+    private static readonly TimeSpan PingInterval = TimeSpan.FromSeconds(15);
+    private const long SilenceLimitMs = 45_000;
+
+    /// <summary>
+    /// Quem some sem fechar a conexão (internet caiu, notebook suspenso) continuaria na sala como "fantasma":
+    /// o WebSocket não percebe sozinho. Um ping a cada 15 s; quem sabe responder e fica 45 s calado sai da sala.
+    /// </summary>
+    private async Task PingLoopAsync(CancellationToken token)
+    {
+        while (!token.IsCancellationRequested)
+        {
+            try { await Task.Delay(PingInterval, token); } catch (OperationCanceledException) { break; }
+            var now = Environment.TickCount64;
+            foreach (var p in _people.Values)
+            {
+                if (p.AnswersPing && now - p.LastSeen > SilenceLimitMs)
+                {
+                    Tools.Log($"Sem resposta há {(now - p.LastSeen) / 1000} s: {p.Name} saiu da sala.");
+                    p.Abort();
+                    continue;
+                }
+                p.EnqueueText("""{"type":"ping"}""");
+            }
+        }
     }
 
     /// <summary>Tenta a porta preferida e as seguintes, caso já estejam em uso.</summary>
@@ -741,6 +769,14 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
             return;
         }
 
+        if (device != "" && !me.IsHost)
+        {
+            foreach (var old in _people.Values.Where(p => !p.IsHost && p.Device == device && p.IsCompanion == me.IsCompanion))
+            {
+                old.EnqueueText("""{"type":"replaced"}""");
+                _ = Task.Delay(300).ContinueWith(_ => old.Abort());
+            }
+        }
         _people[me.Id] = me;
         _ = me.RunSendLoopAsync();
         me.EnqueueText(new JsonObject { ["type"] = "hello", ["id"] = me.Id, ["host"] = me.IsHost }.ToJsonString());
@@ -754,6 +790,7 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
         {
             await foreach (var (data, isText) in me.ReceiveAllAsync(MaxTextBytes, MaxMediaBytes))
             {
+                me.Seen();
                 if (isText) OnTextMessage(me, data);
                 else OnBinaryMessage(me, data);
             }
@@ -793,6 +830,10 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
         switch (Str("type"))
         {
             case "hello":
+            case "pong":
+                me.AnswersPing = true;
+                break;
+
             case "name":
                 me.Name = CleanName(Str("name"), me.IsHost);
                 BroadcastRoom();
@@ -929,6 +970,7 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
 
     public async ValueTask DisposeAsync()
     {
+        _life.Cancel();
         _directory.Dispose();
         Audio.Dispose();
         if (_app != null)
@@ -1039,6 +1081,14 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
 
         /// <summary>Endereço de internet de quem entrou pelo link ("" para conexões deste PC).</summary>
         public string Ip { get; init; } = "";
+
+        /// <summary>Quando chegou a última mensagem dele (Environment.TickCount64).</summary>
+        public long LastSeen => Interlocked.Read(ref _lastSeen);
+        private long _lastSeen = Environment.TickCount64;
+        public void Seen() => Interlocked.Exchange(ref _lastSeen, Environment.TickCount64);
+
+        /// <summary>Respondeu a um ping: versão que sabe responder (só essas são removidas por silêncio).</summary>
+        public volatile bool AnswersPing;
 
         public void EnqueueText(string text) => Enqueue(Encoding.UTF8.GetBytes(text), true, droppable: false);
 

@@ -42,6 +42,18 @@ let canShare = true;
 let roomName = '';
 let closedReason = null;
 
+/** Identificador desta aba (o mesmo ao recarregar a página). */
+const CLIENT_ID = (() => {
+  const fresh = () => [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, '0')).join('');
+  try {
+    let id = sessionStorage.getItem('gamestream-client');
+    if (!/^[0-9a-f]{16}$/.test(id || '')) { id = fresh(); sessionStorage.setItem('gamestream-client', id); }
+    return id;
+  } catch {
+    return fresh();
+  }
+})();
+
 let people = [];
 const streams = new Map();        // número → { no, owner, name, audio, thumbUrl }
 const pendingThumbs = new Map();  // miniatura que chegou antes da lista da sala
@@ -86,7 +98,10 @@ function connect() {
   const proto = REMOTE || location.protocol === 'https:' ? 'wss' : 'ws';
   const server = REMOTE ? REMOTE.slice('https://'.length) : location.host;
   const auth = EMBEDDED ? `role=host&t=${encodeURIComponent(HOST_TOKEN)}` : `role=viewer&k=${encodeURIComponent(VIEW_KEY)}`;
-  const dev = MY_DEVICE ? `&dev=${encodeURIComponent(MY_DEVICE)}` : '';
+  // Cada página tem um identificador: se ela reconectar, o servidor derruba a conexão antiga (senão a pessoa
+  // aparece duas vezes enquanto a conexão velha não cai). No app, é o identificador do PC.
+  const id = MY_DEVICE || (EMBEDDED ? '' : CLIENT_ID);
+  const dev = id ? `&dev=${encodeURIComponent(id)}` : '';
   ws = new WebSocket(`${proto}://${server}/ws?${auth}${dev}`);
   ws.binaryType = 'arraybuffer';
   ws.onopen = () => send({ type: 'hello', name: storedName() || (EMBEDDED ? 'Anfitrião' : 'Convidado') });
@@ -192,6 +207,16 @@ function onControl(msg) {
     case 'expired':
       closedReason = 'expired';
       showRoomMessage('Este link não vale mais', 'Quem criou a sala gerou um link novo. Peça o endereço atualizado.');
+      break;
+
+    case 'ping':
+      send({ type: 'pong' });
+      break;
+
+    case 'replaced':
+      // A mesma página conectou de novo (ex.: aba duplicada): esta deixa de valer.
+      closedReason = 'expired';
+      showRoomMessage('A sala foi aberta em outra aba', 'Use a outra aba ou recarregue esta página.');
       break;
 
     case 'removed':
