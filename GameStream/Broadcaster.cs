@@ -84,13 +84,17 @@ public sealed class Broadcaster : IDisposable
         }
     }
 
-    public async Task StartAsync(StreamSettings s)
+    /// <param name="switching">
+    /// Troca de janela/monitor durante a transmissão: a captura recomeça com a fonte nova, mas quem assiste
+    /// não recebe "transmissão encerrada" — só vê a imagem mudar (o decodificador recomeça no próximo quadro-chave).
+    /// </param>
+    public async Task StartAsync(StreamSettings s, bool switching = false)
     {
         s = Sanitize(s);
         await _lock.WaitAsync();
         try
         {
-            StopCore();
+            StopCore(publishOffline: !switching);
             State = "starting";
             Message = "Iniciando captura…";
 
@@ -206,7 +210,7 @@ public sealed class Broadcaster : IDisposable
         });
     }
 
-    private void StopCore()
+    private void StopCore(bool publishOffline = true)
     {
         _thumbnails?.Cancel();
         _thumbnails = null;
@@ -215,7 +219,7 @@ public sealed class Broadcaster : IDisposable
         _audio?.Stop();
         _audio = null;
         AudioLabel = null;
-        _server.PublishOffline();
+        if (publishOffline) _server.PublishOffline();
     }
 
     /// <summary>

@@ -403,7 +403,9 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
             if (!IsHost(ctx) || Broadcaster == null) return Results.Unauthorized();
             var settings = await ctx.Request.ReadFromJsonAsync<StreamSettings>();
             if (settings == null) return Results.BadRequest();
-            _ = Broadcaster.StartAsync(settings);   // o progresso aparece em /api/status
+            // switch=1: trocar a janela/monitor sem encerrar a transmissão para quem assiste.
+            var switching = ctx.Request.Query["switch"] == "1" && Broadcaster.State == "live";
+            _ = Broadcaster.StartAsync(settings, switching);   // o progresso aparece em /api/status
             return Results.Ok();
         });
 
