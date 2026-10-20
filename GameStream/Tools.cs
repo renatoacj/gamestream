@@ -7,6 +7,16 @@ using System.Security.Cryptography.X509Certificates;
 
 namespace GameStream;
 
+/// <summary>Versão do app ("0.5.9"), mostrada para avisar quando duas pessoas estão em versões diferentes.</summary>
+public static class AppVersion
+{
+    public static readonly string Current =
+        (System.Reflection.Assembly.GetEntryAssembly()?
+            .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+            .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion ?? "0")
+        .Split('+')[0];
+}
+
 /// <summary>
 /// Localiza (ou baixa na primeira execução) as ferramentas externas usadas pelo app.
 /// Ordem de busca: pasta do GameStream.exe → %LOCALAPPDATA%\GameStream → download oficial.

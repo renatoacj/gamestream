@@ -13,9 +13,22 @@ public sealed class AppSettings
     /// <summary>Nome que aparece para os outros na sala ("Seu nome", no menu).</summary>
     public string Name { get; set; } = "";
 
+    /// <summary>
+    /// Dados da interface (salas salvas, salas recentes, qualidade, painéis). Ficavam só no armazenamento do
+    /// navegador embutido, que muda com a porta do app (8790, 8791…) e pode perder o que foi gravado logo antes de
+    /// o app fechar — as salas "sumiam". Aqui ficam no arquivo do app.
+    /// </summary>
+    public Dictionary<string, string> Store { get; set; } = [];
+
     public static AppSettings Current { get; } = Load();
 
+#if DEBUG
+    // Compilações de desenvolvimento usam um arquivo próprio: testes nunca mexem nas salas e preferências reais.
+    private static string FilePath => Path.Combine(Tools.DataDir, "app-settings-dev.json");
+#else
     private static string FilePath => Path.Combine(Tools.DataDir, "app-settings.json");
+#endif
+    private static readonly object FileLock = new();
 
     private static AppSettings Load()
     {
@@ -35,7 +48,9 @@ public sealed class AppSettings
         try
         {
             Directory.CreateDirectory(Tools.DataDir);
-            File.WriteAllText(FilePath, JsonSerializer.Serialize(this));
+            string json;
+            lock (Store) json = JsonSerializer.Serialize(this);
+            lock (FileLock) File.WriteAllText(FilePath, json);
         }
         catch (Exception ex)
         {

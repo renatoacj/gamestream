@@ -7,6 +7,55 @@ const HOST_TOKEN = new URLSearchParams(location.search).get('t');
 const $ = (id) => document.getElementById(id);
 const api = (path) => `/api/${path}?t=${HOST_TOKEN}`;
 
+// ---------- Dados guardados pelo app ----------
+// Salas, salas recentes, qualidade e painéis ficam no arquivo do app (app-settings.json). O armazenamento do
+// navegador embutido sozinho não basta: ele muda com a porta do app (8790, 8791…) e pode perder o que foi gravado
+// logo antes de o app fechar. Ao abrir, a página recebe do app o que estava guardado (antes de ler qualquer coisa);
+// cada gravação vai para os dois lugares.
+const STORE_KEYS = ['gamestream-settings', 'gamestream-name', 'gamestream-my-rooms', 'gamestream-rooms',
+  'gamestream-nav-collapsed', 'gamestream-side-collapsed', 'gamestream-max-viewers'];
+let storePending = {};
+let storeTimer = null;
+
+function flushStore() {
+  const items = storePending;
+  storePending = {};
+  if (!Object.keys(items).length) return;
+  fetch(api('store'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(items), keepalive: true })
+    .catch(() => {});
+}
+
+/** Grava no navegador e no app. */
+function persistItem(key, value) {
+  try { localStorage.setItem(key, value); } catch { /* sem armazenamento */ }
+  storePending[key] = String(value);
+  clearTimeout(storeTimer);
+  storeTimer = setTimeout(flushStore, 300);
+}
+
+(function restoreStore() {
+  let saved = {};
+  try {
+    // Síncrono de propósito: o resto da página lê estes dados logo em seguida. É o próprio app, na mesma máquina.
+    const req = new XMLHttpRequest();
+    req.open('GET', api('store'), false);
+    req.send();
+    if (req.status === 200) saved = JSON.parse(req.responseText) || {};
+  } catch { /* app antigo ou fechando */ }
+  for (const key of STORE_KEYS) {
+    if (typeof saved[key] === 'string') {
+      try { localStorage.setItem(key, saved[key]); } catch { /* sem armazenamento */ }
+    } else {
+      // Gravado por uma versão antiga, só no navegador: passa a ficar no app também.
+      let value = null;
+      try { value = localStorage.getItem(key); } catch { /* sem armazenamento */ }
+      if (value !== null) storePending[key] = value;
+    }
+  }
+  flushStore();
+})();
+window.addEventListener('pagehide', flushStore);
+
 // O padrão é a predefinição "Recomendado": funciona bem na maioria dos PCs e conexões.
 const DEFAULTS = {
   height: 720, fps: 30, constantFps: true, cursor: true,
@@ -54,7 +103,7 @@ function applySettings(s) {
 function savePrefs() {
   try {
     const src = sources.find((x) => x.id === $('source').value);
-    localStorage.setItem('gamestream-settings', JSON.stringify({
+    persistItem('gamestream-settings', JSON.stringify({
       ...readSettings(),
       v: PREFS_VERSION,
       profilePreset: $('profilePreset').value,
@@ -469,7 +518,7 @@ function myName() {
 // do navegador embutido pode não chegar ao disco se o app for fechado logo depois.
 let nameSaveTimer = null;
 function saveName() {
-  try { localStorage.setItem('gamestream-name', myName()); } catch { /* sem armazenamento */ }
+  try { persistItem('gamestream-name', myName()); } catch { /* sem armazenamento */ }
   clearTimeout(nameSaveTimer);
   nameSaveTimer = setTimeout(() => fetch(api('app-settings'), {
     method: 'POST',
@@ -531,7 +580,17 @@ function renderView() {
 
   // Sala do amigo fora do ar ou fechada: mostra um aviso no lugar da sala (senão aparece a página
   // de erro da Cloudflare dentro do quadro). Quando ela volta, recarrega a sala.
-  $('joinMessage').hidden = true;
+  // Versões diferentes entre você e quem criou a sala: muita coisa nova depende dos dois estarem atualizados.
+  const mine = lastStatus?.version;
+  const theirs = joined?.hostVersion;
+  const differs = !!joined && joined.state === 'connected' && !!theirs && !!mine && theirs !== mine;
+  $('joinMessage').hidden = !differs;
+  if (differs) {
+    $('joinMessage').className = 'warn';
+    $('joinMessage').textContent = theirs === 'antiga'
+      ? `Quem criou a sala está numa versão antiga do GameStream (você está na ${mine}). Se algo não funcionar, peça para atualizar.`
+      : `Quem criou a sala está no GameStream ${theirs}, e você no ${mine}. Se algo não funcionar, atualizem para a mesma versão.`;
+  }
   const down = !!joined && joined.state !== 'connected';
   if (down) {
     if (!roomDownSince) roomDownSince = Date.now();
@@ -584,7 +643,7 @@ function myRooms() {
 }
 
 function storeMyRooms(list) {
-  try { localStorage.setItem('gamestream-my-rooms', JSON.stringify(list.slice(0, 20))); } catch { /* sem armazenamento */ }
+  try { persistItem('gamestream-my-rooms', JSON.stringify(list.slice(0, 20))); } catch { /* sem armazenamento */ }
   syncRooms();
 }
 
@@ -792,7 +851,7 @@ function recentRooms() {
 }
 
 function storeRooms(list) {
-  try { localStorage.setItem('gamestream-rooms', JSON.stringify(list.slice(0, 8))); } catch { /* sem armazenamento */ }
+  try { persistItem('gamestream-rooms', JSON.stringify(list.slice(0, 8))); } catch { /* sem armazenamento */ }
 }
 
 function rememberRoom(code, label) {
@@ -842,7 +901,7 @@ function setNavCollapsed(collapsed, save = true) {
   document.body.classList.toggle('nav-collapsed', collapsed);
   $('navToggle').replaceChildren(icon(collapsed ? 'panel-left-open' : 'panel-left-close'));
   $('navToggle').title = collapsed ? 'Expandir o menu' : 'Recolher o menu';
-  if (save) { try { localStorage.setItem('gamestream-nav-collapsed', collapsed ? '1' : '0'); } catch { /* sem armazenamento */ } }
+  if (save) { try { persistItem('gamestream-nav-collapsed', collapsed ? '1' : '0'); } catch { /* sem armazenamento */ } }
 }
 $('navToggle').onclick = () => setNavCollapsed(!document.body.classList.contains('nav-collapsed'));
 try { setNavCollapsed(localStorage.getItem('gamestream-nav-collapsed') === '1', false); } catch { setNavCollapsed(false, false); }
@@ -850,7 +909,7 @@ try { setNavCollapsed(localStorage.getItem('gamestream-nav-collapsed') === '1', 
 function setSideCollapsed(collapsed, save = true) {
   document.body.classList.toggle('side-collapsed', collapsed);
   $('sideShow').hidden = !collapsed;
-  if (save) { try { localStorage.setItem('gamestream-side-collapsed', collapsed ? '1' : '0'); } catch { /* sem armazenamento */ } }
+  if (save) { try { persistItem('gamestream-side-collapsed', collapsed ? '1' : '0'); } catch { /* sem armazenamento */ } }
 }
 $('sideHide').onclick = () => setSideCollapsed(true);
 $('sideShow').onclick = () => setSideCollapsed(false);
@@ -878,7 +937,7 @@ $('rotateBtn').onclick = async () => {
   refresh();
 };
 $('maxViewers').onchange = () => {
-  try { localStorage.setItem('gamestream-max-viewers', $('maxViewers').value); } catch { /* sem armazenamento */ }
+  try { persistItem('gamestream-max-viewers', $('maxViewers').value); } catch { /* sem armazenamento */ }
   fetch(`${api('max-viewers')}&n=${$('maxViewers').value}`, { method: 'POST' });
 };
 $('logBtn').onclick = () => fetch(api('open-log'), { method: 'POST' });

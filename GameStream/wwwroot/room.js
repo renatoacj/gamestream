@@ -15,6 +15,8 @@ const HOST_TOKEN = params.get('t') || '';
 const IN_APP = params.get('app') === '1';
 const MY_DEVICE = params.get('dev') || '';
 const NAME_FROM_APP = (params.get('name') || '').trim().slice(0, 24);
+// Versão do app (só dentro do app): vai junto ao entrar, para todos verem quem está numa versão diferente.
+const APP_VERSION = /^\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(params.get('ver') || '') ? params.get('ver') : '';
 // Sala de um amigo aberta no app: a página é a deste app (mesma versão, som tocado pelo app) e só os dados
 // vêm do servidor do amigo, pelo túnel. Só endereços de túnel da Cloudflare são aceitos.
 const REMOTE = (() => {
@@ -104,7 +106,11 @@ function connect() {
   const dev = id ? `&dev=${encodeURIComponent(id)}` : '';
   ws = new WebSocket(`${proto}://${server}/ws?${auth}${dev}`);
   ws.binaryType = 'arraybuffer';
-  ws.onopen = () => send({ type: 'hello', name: storedName() || (EMBEDDED ? 'Anfitrião' : 'Convidado') });
+  ws.onopen = () => send({
+    type: 'hello',
+    name: storedName() || (EMBEDDED ? 'Anfitrião' : 'Convidado'),
+    ...(APP_VERSION ? { version: APP_VERSION } : {}),
+  });
   ws.onmessage = (e) => {
     if (typeof e.data === 'string') onControl(JSON.parse(e.data));
     else onPacket(e.data);
@@ -388,6 +394,14 @@ function render() {
     if (p.host) chip.append(icon('crown'));
     chip.append(p.name + (p.id === myId ? ' (você)' : ''));
     if (p.host) chip.title = 'Criou a sala';
+    // Versões diferentes do app costumam ser a causa de coisas que não funcionam entre duas pessoas.
+    const hostVersion = people.find((x) => x.host)?.v || '';
+    if (p.v && hostVersion && p.v !== hostVersion) {
+      chip.classList.add('other-version');
+      chip.title = `${p.name} está no GameStream ${p.v}; quem criou a sala, no ${hostVersion}. Atualizem para a mesma versão.`;
+    } else if (p.v) {
+      chip.title = (chip.title ? chip.title + ' · ' : '') + `GameStream ${p.v}`;
+    }
     // Quem criou a sala pode tirar alguém dela.
     if (isHost && !p.host) {
       const remove = document.createElement('button');

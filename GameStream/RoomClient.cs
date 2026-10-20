@@ -46,7 +46,27 @@ public sealed partial class RoomClient : IRoomSink, IDisposable
     /// (e o som é tocado por este app; ver RoomAudioPlayer).
     /// </summary>
     public string? RoomPageUrl => _origin == null ? null
-        : $"/?remote={Uri.EscapeDataString(_origin)}&k={_key}&dev={_device}&app=1&name={Uri.EscapeDataString(_name)}";
+        : $"/?remote={Uri.EscapeDataString(_origin)}&k={_key}&dev={_device}&app=1&ver={AppVersion.Current}&name={Uri.EscapeDataString(_name)}";
+
+    /// <summary>Versão do app de quem criou a sala; "antiga" se for anterior à 0.5.9 (que não informa); null se ainda não sabe.</summary>
+    public string? HostVersion { get; private set; }
+
+    private async Task CheckHostVersionAsync(CancellationToken token)
+    {
+        try
+        {
+            using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            using var res = await http.GetAsync($"{_origin}/api/version", token);
+            if (res.StatusCode == System.Net.HttpStatusCode.NotFound) { HostVersion = "antiga"; return; }
+            if (!res.IsSuccessStatusCode) return;
+            var v = JsonNode.Parse(await res.Content.ReadAsStringAsync(token))?["version"]?.GetValue<string>();
+            if (v != null && v.Length <= 16) HostVersion = v;
+        }
+        catch
+        {
+            // sem resposta: tenta de novo na próxima conexão
+        }
+    }
 
     /// <summary>Origem do servidor da sala (https://xxxx.trycloudflare.com). Com código fixo, muda quando quem criou reabre o app.</summary>
     public string? Origin => _origin;
@@ -191,7 +211,8 @@ public sealed partial class RoomClient : IRoomSink, IDisposable
                 State = "connected";
                 Message = null;
                 Reason = null;
-                SendText(new JsonObject { ["type"] = "hello", ["name"] = _name });
+                SendText(new JsonObject { ["type"] = "hello", ["name"] = _name, ["version"] = AppVersion.Current });
+                _ = CheckHostVersionAsync(token);
                 if (_config is { } config) SendPublish(config);
                 if (_listening >= 0) SendText(new JsonObject { ["type"] = "watch", ["stream"] = _listening, ["audioOnly"] = true });
 
