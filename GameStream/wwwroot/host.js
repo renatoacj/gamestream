@@ -25,8 +25,19 @@ function flushStore() {
     .catch(() => {});
 }
 
+// Cópia em memória (a leitura vem daqui): o armazenamento do navegador embutido já devolveu listas vazias no meio
+// do uso, e o app regravava a lista com um item só — as salas "sumiam".
+const storeCache = {};
+
+/** Lê um dado guardado (da cópia em memória; o navegador só se ela não tiver). */
+function readItem(key) {
+  if (key in storeCache) return storeCache[key];
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+
 /** Grava no navegador e no app. */
 function persistItem(key, value) {
+  storeCache[key] = String(value);
   try { localStorage.setItem(key, value); } catch { /* sem armazenamento */ }
   storePending[key] = String(value);
   clearTimeout(storeTimer);
@@ -44,12 +55,16 @@ function persistItem(key, value) {
   } catch { /* app antigo ou fechando */ }
   for (const key of STORE_KEYS) {
     if (typeof saved[key] === 'string') {
+      storeCache[key] = saved[key];
       try { localStorage.setItem(key, saved[key]); } catch { /* sem armazenamento */ }
     } else {
       // Gravado por uma versão antiga, só no navegador: passa a ficar no app também.
       let value = null;
       try { value = localStorage.getItem(key); } catch { /* sem armazenamento */ }
-      if (value !== null) storePending[key] = value;
+      if (value !== null) {
+        storeCache[key] = value;
+        storePending[key] = value;
+      }
     }
   }
   flushStore();
@@ -115,7 +130,7 @@ function savePrefs() {
 
 function loadPrefs() {
   let saved = {};
-  try { saved = JSON.parse(localStorage.getItem('gamestream-settings') || '{}'); } catch { /* nada salvo */ }
+  try { saved = JSON.parse(readItem('gamestream-settings') || '{}'); } catch { /* nada salvo */ }
   // O padrão de ganho passou a ser "Automático": configurações salvas por versões antigas adotam o novo padrão.
   if (saved.v !== PREFS_VERSION) delete saved.audioGainDb;
   applySettings({ ...DEFAULTS, ...saved });
@@ -645,7 +660,7 @@ $('navBroadcast').onclick = async () => {
 // (o endereço da sala é sorteado de novo), então os amigos recebem o código do dia.
 
 function myRooms() {
-  try { return JSON.parse(localStorage.getItem('gamestream-my-rooms') || '[]'); } catch { return []; }
+  try { return JSON.parse(readItem('gamestream-my-rooms') || '[]'); } catch { return []; }
 }
 
 function storeMyRooms(list) {
@@ -743,7 +758,7 @@ function renderMyRooms() {
     const isOpen = open?.id === r.id;
     box.append(roomCard({
       name: r.name,
-      detail: isOpen ? 'Aberta agora' : `Aberta em ${shortDate(r.at)}`,
+      detail: isOpen ? 'Aberta agora' : `de ${myName() || 'você'}`,
       detailClass: isOpen ? 'open-tag' : '',
       open: isOpen,
       primary: isOpen,
@@ -863,11 +878,19 @@ $('joinUrl').onkeydown = (e) => { if (e.key === 'Enter') joinRoom(); };
 // Só ajudam enquanto a sala continuar aberta: o código muda quando quem a criou fecha o app.
 
 function recentRooms() {
-  try { return JSON.parse(localStorage.getItem('gamestream-rooms') || '[]'); } catch { return []; }
+  try { return JSON.parse(readItem('gamestream-rooms') || '[]'); } catch { return []; }
 }
 
 function storeRooms(list) {
   try { persistItem('gamestream-rooms', JSON.stringify(list.slice(0, 8))); } catch { /* sem armazenamento */ }
+}
+
+/** Código fixo "tavena-do-wilfer-<guid>" → "Tavena do wilfer" (o nome da sala vem no começo do código). */
+function titleFromCode(code) {
+  const m = /^([a-z0-9-]+)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.exec(code || '');
+  if (!m) return '';
+  const text = m[1].replace(/-/g, ' ');
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 /** Nomes padrão (de quem não preencheu "Seu nome", ou da 0.5.7) não servem para identificar a sala. */
@@ -890,8 +913,8 @@ function renderRecent() {
   for (const r of list) {
     box.append(roomCard({
       // Em cima, o nome que o dono deu à sala; embaixo, quem criou e quando você entrou.
-      name: r.title || (realName(r.label) ? `Sala de ${r.label}` : 'Sala'),
-      detail: (realName(r.label) ? `de ${r.label} · ` : '') + shortDate(r.at),
+      name: r.title || titleFromCode(r.code) || (realName(r.label) ? `Sala de ${r.label}` : 'Sala'),
+      detail: realName(r.label) ? `de ${r.label}` : 'Criador ainda não informado',
       action: 'Entrar',
       onAction: () => joinRoom(r.code),
       removeTitle: 'Tirar da lista',
@@ -928,7 +951,7 @@ function setNavCollapsed(collapsed, save = true) {
   if (save) { try { persistItem('gamestream-nav-collapsed', collapsed ? '1' : '0'); } catch { /* sem armazenamento */ } }
 }
 $('navToggle').onclick = () => setNavCollapsed(!document.body.classList.contains('nav-collapsed'));
-try { setNavCollapsed(localStorage.getItem('gamestream-nav-collapsed') === '1', false); } catch { setNavCollapsed(false, false); }
+try { setNavCollapsed(readItem('gamestream-nav-collapsed') === '1', false); } catch { setNavCollapsed(false, false); }
 
 function setSideCollapsed(collapsed, save = true) {
   document.body.classList.toggle('side-collapsed', collapsed);
@@ -937,7 +960,7 @@ function setSideCollapsed(collapsed, save = true) {
 }
 $('sideHide').onclick = () => setSideCollapsed(true);
 $('sideShow').onclick = () => setSideCollapsed(false);
-try { setSideCollapsed(localStorage.getItem('gamestream-side-collapsed') === '1', false); } catch { /* sem armazenamento */ }
+try { setSideCollapsed(readItem('gamestream-side-collapsed') === '1', false); } catch { /* sem armazenamento */ }
 
 // ---------- Controle do link ----------
 
@@ -992,7 +1015,7 @@ $('startBtn').onclick = start;
 $('stopBtn').onclick = stop;
 const saved = loadPrefs();
 try {
-  $('myName').value = localStorage.getItem('gamestream-name') || '';
+  $('myName').value = readItem('gamestream-name') || '';
   activeRoomId = sessionStorage.getItem('gamestream-active-room');
 } catch { /* sem armazenamento */ }
 loadSources(saved);
@@ -1001,7 +1024,7 @@ loadName();
 syncRooms();
 // O limite de pessoas fica no servidor; reaplica o que foi escolhido da última vez.
 try {
-  const max = localStorage.getItem('gamestream-max-viewers');
+  const max = readItem('gamestream-max-viewers');
   if (max !== null) fetch(`${api('max-viewers')}&n=${max}`, { method: 'POST' });
 } catch { /* sem armazenamento */ }
 refresh();

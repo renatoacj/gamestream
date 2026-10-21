@@ -578,6 +578,11 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
                     if (node is null) { store.Remove(key); continue; }
                     if (node is not JsonValue v || !v.TryGetValue<string>(out var value) || value.Length > 256 * 1024) continue;
                     if (store.Count >= 40 && !store.ContainsKey(key)) continue;
+                    if (key is "gamestream-my-rooms" or "gamestream-rooms" && store.TryGetValue(key, out var before))
+                    {
+                        var (was, now) = (CountItems(before), CountItems(value));
+                        if (was >= 2 && now < was - 1) Tools.Log($"Aviso: a lista '{key}' passou de {was} para {now} itens de uma vez.");
+                    }
                     store[key] = value;
                 }
             }
@@ -1005,6 +1010,11 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
     {
         var clean = new string((name ?? "").Where(ch => !char.IsControl(ch)).ToArray()).Trim();
         return clean.Length > 32 ? clean[..32].Trim() : clean;
+    }
+
+    private static int CountItems(string json)
+    {
+        try { return JsonNode.Parse(json) is JsonArray a ? a.Count : 0; } catch { return 0; }
     }
 
     private static string CleanName(string? name, bool isHost)
