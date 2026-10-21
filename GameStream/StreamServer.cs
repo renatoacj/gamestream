@@ -56,7 +56,12 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
     private int _nextStreamNo;
 
     // Endereços de quem o anfitrião removeu da sala: não entram de novo enquanto o app estiver aberto.
-    private readonly ConcurrentDictionary<string, bool> _removedIps = new();
+    /// <summary>
+    /// Endereços de quem foi removido → até quando (Environment.TickCount64). Dura 10 minutos, ou até o anfitrião
+    /// gerar um código novo ou reabrir a sala (aí ele está chamando a pessoa de volta).
+    /// </summary>
+    private readonly ConcurrentDictionary<string, long> _removedIps = new();
+    private static readonly long RemovalMs = (long)TimeSpan.FromMinutes(10).TotalMilliseconds;
 
     /// <summary>Token secreto usado só pela janela do app.</summary>
     public string HostToken { get; } = NewToken(24);
@@ -173,6 +178,7 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
     private void SetViewKey(string key, string pin, bool keepOld = true)
     {
         if (key == ViewKey && pin == RoomPin) return;
+        _removedIps.Clear();   // abriu outra sala (ou reabriu esta): começa sem ninguém bloqueado
         lock (_pinLock)
         {
             _closedKeys.RemoveAll(k => k.Key == ViewKey || k.Key == key);
@@ -366,6 +372,7 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
                     roomUrl = Joined.RoomPageUrl,
                     origin = Joined.Origin,
                     hostName = Joined.HostName,
+                    roomName = Joined.RoomName,
                 },
             });
         });
@@ -523,6 +530,7 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
                     closeToTray = AppSettings.Current.CloseToTray,
                     startWithWindows = AppSettings.StartWithWindows,
                     name = AppSettings.Current.Name,
+                    defaultName = Environment.UserName,
                 })
                 : Results.Unauthorized());
 
@@ -607,6 +615,7 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
     /// <summary>Gera um link novo e desconecta todos os convidados (ex.: o link vazou).</summary>
     public void RotateViewKey()
     {
+        _removedIps.Clear();   // código novo: quem foi removido pode voltar se receber o código
         ViewKey = NewToken(12);
         RoomPin = NewPin();
         foreach (var p in _people.Values.Where(p => !p.IsHost))
@@ -789,7 +798,7 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
             IsCompanion = companion,
             Ip = ip,
         };
-        if (ip != "" && _removedIps.ContainsKey(ip))
+        if (ip != "" && _removedIps.TryGetValue(ip, out var bannedUntil) && Environment.TickCount64 < bannedUntil)
         {
             me.EnqueueText("""{"type":"removed"}""");
             await me.RunSendLoopAsync(closeWhenEmpty: true);
@@ -923,7 +932,7 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
             .ToList();
         foreach (var p in same)
         {
-            if (p.Ip != "") _removedIps[p.Ip] = true;
+            if (p.Ip != "") _removedIps[p.Ip] = Environment.TickCount64 + RemovalMs;
             p.EnqueueText("""{"type":"removed"}""");
             _ = Task.Delay(400).ContinueWith(_ => p.Abort());
         }

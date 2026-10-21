@@ -452,7 +452,8 @@ async function refresh() {
   // A sala: a sua (você como anfitrião) ou a do amigo em que você entrou.
   joined = s.joined;
   lastStatus = s;
-  if (joined?.hostName && joinedWith) rememberRoom(joinedWith, joined.hostName);   // dá nome à sala na lista de recentes
+  // Dá nome à sala na lista de recentes: o nome que o dono escolheu e o nome dele.
+  if (joined?.state === 'connected' && joinedWith && (joined.hostName || joined.roomName)) rememberRoom(joinedWith, joined.hostName, joined.roomName);
   const wanted = joined ? joined.roomUrl || 'about:blank' : s.roomUrl + (myName() ? `&name=${encodeURIComponent(myName())}` : '');
   if (wanted !== roomSrc) {
     roomSrc = wanted;
@@ -537,6 +538,11 @@ async function loadName() {
       refresh();   // a sala embutida mostra o nome
     } else if (!s.name && myName()) {
       saveName();   // nome de versões antigas (só no navegador embutido): passa a ficar no app também
+    } else if (!s.name && !myName() && s.defaultName) {
+      // Ninguém preencheu: usa o nome do usuário do Windows (melhor que aparecer como "Anfitrião"). Dá para mudar.
+      $('myName').value = String(s.defaultName).slice(0, 24);
+      saveName();
+      refresh();
     }
   } catch { /* app fechando */ }
 }
@@ -563,7 +569,7 @@ function renderView() {
   $('pageTitle').textContent = settings ? 'Configurações'
     : view === 'broadcast' ? 'Transmissão'
     : lobby ? 'Salas'
-    : joined ? `Sala de ${joined.hostName || 'um amigo'}`
+    : joined ? joined.roomName || `Sala de ${realName(joined.hostName) || 'um amigo'}`
     : (activeRoom()?.name || 'Minha sala');
   $('backToRoomsBtn').hidden = lobby || settings || !(joined || own);
   $('roomActionBtn').hidden = lobby || settings || !(joined || own);
@@ -697,6 +703,11 @@ async function openRoom(room) {
 async function createRoom() {
   const name = $('newRoomName').value.trim().slice(0, 32) || `Sala ${myRooms().length + 1}`;
   $('newRoomDialog').close();
+  if (joined) {
+    // Na sala de um amigo: sai dela antes (senão a sala nova abre "por trás" e a tela continua na do amigo).
+    if (!(await ask('Sair da sala do seu amigo?', `Você sai dela para abrir "${name}".`, 'Sair e criar'))) return;
+    await leaveRoom();
+  }
   const room = { id: Math.random().toString(36).slice(2, 10), name, guid: crypto.randomUUID(), at: Date.now() };
   storeMyRooms([room, ...myRooms()]);
   $('newRoomName').value = '';
@@ -768,7 +779,12 @@ function openNewRoom() {
 
 $('createRoomBtn').onclick = createRoom;
 $('newRoomCancel').onclick = () => $('newRoomDialog').close();
-$('newRoomName').onkeydown = (e) => { if (e.key === 'Enter') createRoom(); };
+$('newRoomName').onkeydown = (e) => {
+  if (e.key !== 'Enter') return;
+  // Sem isto, o mesmo Enter "clica" no card "Nova sala" (que recebe o foco quando a janela fecha) e ela reabre.
+  e.preventDefault();
+  createRoom();
+};
 $('roomActionBtn').onclick = async () => {
   if (joined) await leaveRoom();
   else await endOwnRoom();
@@ -854,9 +870,16 @@ function storeRooms(list) {
   try { persistItem('gamestream-rooms', JSON.stringify(list.slice(0, 8))); } catch { /* sem armazenamento */ }
 }
 
-function rememberRoom(code, label) {
+/** Nomes padrão (de quem não preencheu "Seu nome", ou da 0.5.7) não servem para identificar a sala. */
+const realName = (name) => (name && name !== 'Anfitrião' && name !== 'Convidado' ? name : '');
+
+function rememberRoom(code, label, title) {
   const old = recentRooms().find((r) => r.code === code);
-  storeRooms([{ code, label: label || old?.label || '', at: Date.now() }, ...recentRooms().filter((r) => r.code !== code)]);
+  const next = { code, label: realName(label) || old?.label || '', title: title || old?.title || '', at: Date.now() };
+  if (old && old.label === next.label && old.title === next.title && Date.now() - old.at < 60_000) return;   // nada mudou
+  // A mesma sala com outro código (o dono gerou um novo): fica só a mais recente.
+  const sameRoom = (r) => next.title && next.label && r.title === next.title && r.label === next.label;
+  storeRooms([next, ...recentRooms().filter((r) => r.code !== code && !sameRoom(r))]);
 }
 
 function renderRecent() {
@@ -866,8 +889,9 @@ function renderRecent() {
   box.textContent = '';
   for (const r of list) {
     box.append(roomCard({
-      name: r.label ? `Sala de ${r.label}` : 'Sala',
-      detail: `${shortDate(r.at)} · ${r.code}`,
+      // Em cima, o nome que o dono deu à sala; embaixo, quem criou e quando você entrou.
+      name: r.title || (realName(r.label) ? `Sala de ${r.label}` : 'Sala'),
+      detail: (realName(r.label) ? `de ${r.label} · ` : '') + shortDate(r.at),
       action: 'Entrar',
       onAction: () => joinRoom(r.code),
       removeTitle: 'Tirar da lista',

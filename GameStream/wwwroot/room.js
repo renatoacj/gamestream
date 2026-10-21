@@ -227,7 +227,7 @@ function onControl(msg) {
 
     case 'removed':
       closedReason = 'expired';   // não tenta entrar de novo
-      showRoomMessage('Você foi removido da sala', 'Quem criou a sala encerrou a sua participação.');
+      showRoomMessage('Você foi removido da sala', 'Quem criou a sala encerrou a sua participação. Dá para entrar de novo daqui a 10 minutos, ou antes se ele gerar um código novo.');
       break;
   }
 }
@@ -409,7 +409,7 @@ function render() {
       remove.append(icon('x'));
       remove.title = `Remover ${p.name} da sala`;
       remove.onclick = () => {
-        if (confirm(`Remover ${p.name} da sala? A pessoa é desconectada e não consegue voltar enquanto o app estiver aberto.`)) {
+        if (confirm(`Remover ${p.name} da sala? A pessoa é desconectada e só consegue voltar daqui a 10 minutos — ou antes, se você gerar um código novo.`)) {
           send({ type: 'remove', id: p.id });
         }
       };

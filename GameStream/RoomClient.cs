@@ -76,6 +76,9 @@ public sealed partial class RoomClient : IRoomSink, IDisposable
 
     public string State { get; private set; } = "connecting";   // connecting | connected | closed
 
+    /// <summary>Nome que quem criou deu à sala ("" na transmissão ou em versões que não informam).</summary>
+    public string RoomName { get; private set; } = "";
+
     /// <summary>Nome de quem criou a sala (aparece no título e na lista de salas recentes).</summary>
     public string? HostName { get; private set; }
     /// <summary>Por que não está conectado: "gone" (a sala saiu do ar), "closed" (fechada, vai reabrir) ou null.</summary>
@@ -343,6 +346,8 @@ public sealed partial class RoomClient : IRoomSink, IDisposable
                 case "room":
                     HostName = (msg["people"] as JsonArray)?
                         .FirstOrDefault(p => p?["host"]?.GetValue<bool>() == true)?["name"]?.GetValue<string>() ?? HostName;
+                    if (msg["title"] is JsonValue tv && tv.TryGetValue<string>(out var title))
+                        RoomName = title.Length > 32 ? title[..32] : title;
                     break;
                 case "unpublished":
                     _config = null;
@@ -363,7 +368,7 @@ public sealed partial class RoomClient : IRoomSink, IDisposable
                     break;
                 case "removed":
                     _config = null;
-                    Message = "Você foi removido da sala por quem a criou.";
+                    Message = "Você foi removido da sala por quem a criou. Dá para entrar de novo daqui a 10 minutos, ou antes se ele gerar um código novo.";
                     PublishRejected?.Invoke(Message);
                     return true;
             }
