@@ -39,6 +39,12 @@
   header h1 { font-size: 17px; font-weight: 600; margin: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #roomActionBtn:hover { border-color: var(--live); color: var(--live); }
   #joinMessage { font-size: 13px; }
+  .update-banner { display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 14px; border-radius: 10px;
+    background: var(--accent-soft); border: 1px solid rgba(124, 92, 255, .45); }
+  .update-banner .grow { flex: 1; }
+  .update-banner > .icon { color: var(--accent-2); }
+  .link-btn { color: var(--accent-2); text-decoration: none; font-size: 13px; }
+  .link-btn:hover { text-decoration: underline; }
   #joinMessage.error { color: var(--live); }
   #joinMessage.warn { color: var(--warn); background: rgba(245, 185, 66, .08); border: 1px solid rgba(245, 185, 66, .3); border-radius: 10px; padding: 8px 12px; }
 
@@ -251,6 +257,12 @@
     <span id="liveBadge" class="badge"><span class="dot"></span><span id="liveText">OFFLINE</span></span>
     <button id="sideShow" class="icon-btn ghost" data-icon="panel-open" title="Mostrar o painel lateral (código, link e status)" hidden></button>
   </header>
+  <div id="updateBanner" class="update-banner" hidden>
+    <span data-icon="refresh"></span>
+    <span class="grow" id="updateText"></span>
+    <button id="updateBtn" class="primary">Baixar</button>
+    <button id="updateClose" class="ghost icon-btn" data-icon="x" title="Agora não"></button>
+  </div>
   <div id="joinMessage" class="muted" hidden></div>
 
   <!-- Salas: as suas, a de um amigo (por código) e as recentes -->
@@ -439,6 +451,9 @@
       <div class="set-head"><h2>Aplicativo</h2></div>
       <label class="set-row"><span>Fechar a janela deixa o app na bandeja</span><input type="checkbox" id="optTray" class="switch"></label>
       <label class="set-row"><span>Iniciar com o Windows</span><input type="checkbox" id="optAutostart" class="switch"></label>
+      <label class="set-row" title="Publica no ntfy.sh, criptografado, o endereço atual das suas salas salvas, para o código delas não mudar quando o app reabre."><span>Código fixo das salas (ntfy.sh)</span><input type="checkbox" id="optFixedCodes" class="switch"></label>
+      <label class="set-row" title="Consulta no GitHub se há uma versão nova do GameStream."><span>Avisar quando houver atualização</span><input type="checkbox" id="optUpdates" class="switch"></label>
+      <div class="set-row"><span>Privacidade</span><a class="link-btn" href="https://github.com/renatoacj/gamestream/blob/main/PRIVACY.md" id="privacyLink">Política de privacidade</a></div>
       <div class="set-row"><span>Log técnico</span><button id="logBtn" data-icon="file" title="Detalhes técnicos, úteis para relatar um problema">Abrir log</button></div>
       <div id="appSettingsError" class="locked-note" hidden></div>
     </section>

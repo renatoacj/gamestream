@@ -1,0 +1,15 @@
+Privacidade
+
+O GameStream não coleta dados de uso, não tem anúncios e não envia nada para os autores do programa. Configurações e registros ficam só no seu PC.
+
+O programa usa serviços de terceiros:
+
+- GitHub: na primeira vez que o app abre, ele baixa o FFmpeg e o cloudflared.
+
+- Cloudflare (trycloudflare.com): enquanto o app está aberto, ele cria o link público da sua transmissão ou sala. O vídeo, o som e as mensagens da sala passam pela Cloudflare até quem estiver assistindo.
+
+- ntfy.sh: se você tiver salas salvas, o endereço atual de cada uma é publicado no ntfy.sh, criptografado (só quem tem o código da sala consegue ler), para o código continuar valendo quando o app reabre. O ntfy.sh vê o seu endereço de IP. Você pode desligar isso na próxima tela ou depois em Configurações. Sem ele, o código das salas muda sempre que o app reabre.
+
+- GitHub: o app consulta, ao abrir e a cada 6 horas, se há versão nova (só lê informação pública). Também dá para desligar na próxima tela ou em Configurações.
+
+Política completa: https://github.com/renatoacj/gamestream/blob/main/PRIVACY.md

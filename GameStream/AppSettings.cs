@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Win32;
 
 namespace GameStream;
@@ -19,6 +20,29 @@ public sealed class AppSettings
     /// o app fechar — as salas "sumiam". Aqui ficam no arquivo do app.
     /// </summary>
     public Dictionary<string, string> Store { get; set; } = [];
+
+    /// <summary>Publicar no ntfy.sh o endereço das salas salvas (código fixo). null = o que foi escolhido na instalação.</summary>
+    public bool? FixedRoomCodes { get; set; }
+
+    /// <summary>Consultar no GitHub se há versão nova. null = o que foi escolhido na instalação.</summary>
+    public bool? CheckUpdates { get; set; }
+
+    [JsonIgnore] public bool FixedRoomCodesEnabled => FixedRoomCodes ?? InstallerChoice("FixedRoomCodes");
+    [JsonIgnore] public bool CheckUpdatesEnabled => CheckUpdates ?? InstallerChoice("CheckUpdates");
+
+    /// <summary>Opção marcada na instalação (HKCU\Software\GameStream); ligada se não houver.</summary>
+    private static bool InstallerChoice(string name)
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(@"Software\GameStream");
+            return key?.GetValue(name) is not int value || value != 0;
+        }
+        catch
+        {
+            return true;
+        }
+    }
 
     public static AppSettings Current { get; } = Load();
 

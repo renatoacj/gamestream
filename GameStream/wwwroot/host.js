@@ -171,6 +171,8 @@ async function loadAppSettings() {
     const s = await (await fetch(api('app-settings'))).json();
     $('optTray').checked = s.closeToTray;
     $('optAutostart').checked = s.startWithWindows;
+    $('optFixedCodes').checked = s.fixedRoomCodes;
+    $('optUpdates').checked = s.checkUpdates;
   } catch { /* app fechando */ }
 }
 
@@ -178,7 +180,12 @@ async function saveAppSettings() {
   const res = await fetch(api('app-settings'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ closeToTray: $('optTray').checked, startWithWindows: $('optAutostart').checked }),
+    body: JSON.stringify({
+      closeToTray: $('optTray').checked,
+      startWithWindows: $('optAutostart').checked,
+      fixedRoomCodes: $('optFixedCodes').checked,
+      checkUpdates: $('optUpdates').checked,
+    }),
   }).catch(() => null);
   const error = res && !res.ok ? (await res.json().catch(() => ({}))).error : null;
   $('appSettingsError').textContent = error || '';
@@ -187,6 +194,21 @@ async function saveAppSettings() {
 }
 $('optTray').onchange = saveAppSettings;
 $('optAutostart').onchange = saveAppSettings;
+$('optFixedCodes').onchange = saveAppSettings;
+$('optUpdates').onchange = saveAppSettings;
+// O link da política abre no navegador padrão (a janela do app não navega para fora).
+$('privacyLink').onclick = (e) => { e.preventDefault(); fetch(api('open-privacy'), { method: 'POST' }); };
+
+// ---------- Aviso de versão nova ----------
+let updateDismissed = '';
+function renderUpdate(s) {
+  const v = s?.update?.version;
+  const show = !!v && v !== updateDismissed;
+  $('updateBanner').hidden = !show;
+  if (show) $('updateText').textContent = `Nova versão do GameStream disponível: ${v} (você está na ${s.version}).`;
+}
+$('updateBtn').onclick = () => fetch(api('open-update'), { method: 'POST' });
+$('updateClose').onclick = () => { updateDismissed = lastStatus?.update?.version || ''; renderUpdate(lastStatus); };
 
 // ---------- Janelas e monitores (com miniaturas) ----------
 
@@ -485,6 +507,7 @@ async function refresh() {
     renderLink(s);
   }
   renderCode(s);
+  renderUpdate(s);
 }
 
 function renderLink(s) {

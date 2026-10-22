@@ -128,6 +128,7 @@ internal sealed class RoomDirectory : IDisposable
             try { await Task.Delay(TimeSpan.FromSeconds(5), token); } catch (OperationCanceledException) { break; }
             var url = _currentUrl();
             if (!RoomIds.IsTunnelOrigin(url)) continue;
+            if (!AppSettings.Current.FixedRoomCodesEnabled) continue;   // desligado pelo usuário (privacidade)
             foreach (var guid in _rooms)
             {
                 if (_published.TryGetValue(guid, out var last) && last.Url == url && DateTime.UtcNow - last.At < Republish) continue;
