@@ -216,6 +216,7 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
         _webRoot = webRoot;
         _directory = new RoomDirectory(() => Tunnel?.Url);
         _ = PingLoopAsync(_life.Token);
+        UpdateChecker.Start(_life.Token);
     }
 
     private readonly CancellationTokenSource _life = new();
@@ -363,6 +364,9 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
                 code = RoomCode,
                 roomUrl = $"/?embedded=1&t={HostToken}&ver={AppVersion.Current}",
                 version = AppVersion.Current,
+                update = AppSettings.Current.CheckUpdatesEnabled && UpdateChecker.NewVersion != null
+                    ? new { version = UpdateChecker.NewVersion }
+                    : null,
                 joined = Joined == null ? null : new
                 {
                     state = Joined.State,
@@ -530,6 +534,8 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
                     closeToTray = AppSettings.Current.CloseToTray,
                     startWithWindows = AppSettings.StartWithWindows,
                     name = AppSettings.Current.Name,
+                    fixedRoomCodes = AppSettings.Current.FixedRoomCodesEnabled,
+                    checkUpdates = AppSettings.Current.CheckUpdatesEnabled,
                     defaultName = Environment.UserName,
                 })
                 : Results.Unauthorized());
@@ -548,6 +554,17 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
                 var clean = new string(name.Where(ch => !char.IsControl(ch)).ToArray()).Trim();
                 AppSettings.Current.Name = clean.Length > 24 ? clean[..24] : clean;
                 AppSettings.Current.Save();
+            }
+            if (body?["fixedRoomCodes"]?.GetValue<bool>() is { } fixedCodes)
+            {
+                AppSettings.Current.FixedRoomCodes = fixedCodes;
+                AppSettings.Current.Save();
+            }
+            if (body?["checkUpdates"]?.GetValue<bool>() is { } checkUpdates)
+            {
+                AppSettings.Current.CheckUpdates = checkUpdates;
+                AppSettings.Current.Save();
+                if (checkUpdates) _ = UpdateChecker.CheckAsync();
             }
             if (body?["startWithWindows"]?.GetValue<bool>() is { } autostart)
             {
@@ -589,6 +606,16 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
             AppSettings.Current.Save();
             return Results.Ok();
         });
+
+        app.MapPost("/api/open-privacy", (HttpContext ctx) =>
+        {
+            if (!IsHost(ctx)) return Results.Unauthorized();
+            Process.Start(new ProcessStartInfo("https://github.com/renatoacj/gamestream/blob/main/PRIVACY.md") { UseShellExecute = true });
+            return Results.Ok();
+        });
+
+        app.MapPost("/api/open-update", (HttpContext ctx) =>
+            IsHost(ctx) && UpdateChecker.OpenDownloadPage() ? Results.Ok() : Results.BadRequest());
 
         app.MapPost("/api/open-log", (HttpContext ctx) =>
         {

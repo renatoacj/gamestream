@@ -135,6 +135,21 @@ O link para o navegador continua sendo o endereço da Cloudflare, que muda quand
 - **Quick Tunnel**: a Cloudflare oferece esse serviço de graça e sem garantia de disponibilidade (SLA). O link do navegador muda a cada vez que o app abre (o código das salas salvas, não).
 - **Navegador do amigo**: precisa ter WebCodecs. Chrome, Edge e Safari atualizados funcionam, e o Firefox recente também deve funcionar.
 
+## Privacidade
+
+O GameStream não coleta dados de uso nem envia nada aos autores. Ele usa a Cloudflare (link público), o GitHub (downloads e aviso de atualização) e o ntfy.sh (código fixo das salas, criptografado); os dois últimos podem ser desligados. Detalhes na [política de privacidade](PRIVACY.md).
+
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+
+- Committers and reviewers: [renatoacj](https://github.com/renatoacj)
+- Approvers: [renatoacj](https://github.com/renatoacj)
+
+Os instaladores publicados em [Releases](https://github.com/renatoacj/gamestream/releases) são compilados pelo GitHub Actions a partir do código deste repositório ([build.yml](.github/workflows/build.yml)).
+
+Privacy policy: see [PRIVACY.md](PRIVACY.md). This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it, except for the services listed in the privacy policy, which can be turned off during installation or in the app settings.
+
 ## Licença
 
 [MIT](LICENSE)

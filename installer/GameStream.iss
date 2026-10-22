@@ -27,6 +27,8 @@ MinVersion=10.0.18362
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 LicenseFile=..\LICENSE
+; Política de privacidade mostrada durante a instalação (exigência da assinatura de código da SignPath Foundation).
+InfoBeforeFile=privacy.txt
 SetupIconFile=..\GameStream\Assets\app.ico
 UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName}
@@ -45,6 +47,8 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
+Name: "fixedcodes"; Description: "Código fixo das salas: publicar no ntfy.sh, criptografado, o endereço das salas salvas"; GroupDescription: "Serviços de terceiros (dá para mudar depois em Configurações):"
+Name: "updatecheck"; Description: "Avisar quando houver atualização (consulta o GitHub)"; GroupDescription: "Serviços de terceiros (dá para mudar depois em Configurações):"
 
 [InstallDelete]
 ; Arquivos de versões antigas que não existem mais (a instalação é feita por cima da anterior).
@@ -65,6 +69,11 @@ Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /T /IM {#AppExe}"; Flags: runhidden; RunOnceId: "KillApp"
 
 [Registry]
+; Escolhas da instalação sobre serviços de terceiros (o app usa enquanto o usuário não mudar em Configurações).
+Root: HKCU; Subkey: "Software\GameStream"; ValueType: dword; ValueName: "FixedRoomCodes"; ValueData: 1; Tasks: fixedcodes; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\GameStream"; ValueType: dword; ValueName: "FixedRoomCodes"; ValueData: 0; Tasks: not fixedcodes; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\GameStream"; ValueType: dword; ValueName: "CheckUpdates"; ValueData: 1; Tasks: updatecheck; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\GameStream"; ValueType: dword; ValueName: "CheckUpdates"; ValueData: 0; Tasks: not updatecheck; Flags: uninsdeletekey
 ; "Iniciar com o Windows" (ligado nas Configurações do app): a entrada sai junto na desinstalação.
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "GameStream"; Flags: uninsdeletevalue dontcreatekey
 
