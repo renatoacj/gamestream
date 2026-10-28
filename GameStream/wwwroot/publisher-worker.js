@@ -18,19 +18,43 @@ let forceKeyframe = true;
 let lastKeyframeTs = -Infinity;
 let lastThumb = 0;
 let audioOk = true;
+let ticker = null;
 
 self.onmessage = (e) => {
   const m = e.data;
   if (m.type === 'start') {
     running = true;
     encoderConfig = m.encoderConfig;
-    pump(m.video, onVideoFrame).catch(fail);
-    if (m.audio) pump(m.audio, onAudioData).catch((err) => console.warn('áudio', err));
+    if (m.video) {
+      pump(m.video, onVideoFrame).catch(fail);
+      if (m.audio) pump(m.audio, onAudioData).catch((err) => console.warn('áudio', err));
+    } else {
+      // Sem MediaStreamTrackProcessor (ex.: Firefox): a página manda cada quadro quando este relógio pede.
+      // O relógio fica aqui porque, com a aba em segundo plano, o worker não é freado como a página.
+      ticker = setInterval(() => { if (running) self.postMessage({ type: 'tick' }); }, 1000 / m.fps);
+    }
+  } else if (m.type === 'frame') {
+    try {
+      if (running) onVideoFrame(m.frame);
+    } catch (err) {
+      fail(err);
+    } finally {
+      m.frame.close();
+    }
+  } else if (m.type === 'pcm') {
+    // Som vindo do AudioWorklet (48 kHz, estéreo, planar) quando não há MediaStreamTrackProcessor.
+    if (!running || typeof AudioData === 'undefined') return;
+    const data = new AudioData({
+      format: 'f32-planar', sampleRate: 48000, numberOfChannels: 2,
+      numberOfFrames: m.data.length / 2, timestamp: m.timestamp, data: m.data,
+    });
+    try { onAudioData(data); } finally { data.close(); }
   } else if (m.type === 'keyframe') {
     forceKeyframe = true;
     if (m.thumbnail) lastThumb = 0;   // a sala acabou de aceitar a transmissão: manda a miniatura já
   } else if (m.type === 'stop') {
     running = false;
+    clearInterval(ticker);
     for (const enc of [videoEncoder, audioEncoder]) {
       if (enc && enc.state !== 'closed') enc.close();
     }

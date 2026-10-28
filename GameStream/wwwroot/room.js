@@ -435,8 +435,9 @@ function render() {
   const sharing = !!publisher;
   $('shareBtn').hidden = EMBEDDED || IN_APP || !ws || ws.readyState !== WebSocket.OPEN || (!sharing && !canShare);
   $('shareQuality').hidden = $('shareBtn').hidden || sharing;
-  $('shareBtn').disabled = !sharing && !SHARE_SUPPORTED;
-  $('shareBtn').title = SHARE_SUPPORTED ? '' : 'Para compartilhar a tela, use o Chrome ou o Edge no computador.';
+  // Sempre clicável: sem suporte, o clique explica (um botão apagado sem explicação parecia que não existia).
+  $('shareBtn').disabled = false;
+  $('shareBtn').title = SHARE_SUPPORTED ? '' : 'Este navegador não consegue compartilhar a tela.';
   setLabel($('shareBtn'), sharing ? 'stop' : 'monitor', sharing ? 'Parar de compartilhar' : 'Compartilhar minha tela');
   $('shareBtn').className = sharing ? 'danger' : 'primary';
 }
@@ -975,8 +976,10 @@ document.addEventListener('fullscreenchange', () => {
 // (publisher-worker.js), que continua trabalhando com a aba em segundo plano —
 // o normal para quem está jogando enquanto compartilha.
 
+// Compartilhar precisa de captura de tela + WebCodecs. MediaStreamTrackProcessor (Chrome/Edge) é o caminho
+// principal; sem ele (Firefox), os quadros saem de um <video> escondido e o som de um AudioWorklet.
 const SHARE_SUPPORTED = !!navigator.mediaDevices?.getDisplayMedia &&
-  'MediaStreamTrackProcessor' in window && 'VideoEncoder' in window && 'Worker' in window;
+  'VideoEncoder' in window && 'VideoFrame' in window && 'Worker' in window;
 
 let publisher = null;
 
@@ -1026,6 +1029,7 @@ async function startPublishing(media, q) {
   }
 
   const worker = new Worker('publisher-worker.js');
+  const useTrackProcessor = 'MediaStreamTrackProcessor' in window;
   const p = publisher = {
     media, worker, streamNo: null, congested: false,
     onPublished(no) {
@@ -1049,18 +1053,25 @@ async function startPublishing(media, q) {
         p.congested = false;
       }
       ws.send(m.buf);
+    } else if (m.type === 'tick') {
+      p.feeder?.grab();
     } else if (m.type === 'error') {
       stopSharing(true);
       toast('O compartilhamento parou: ' + m.message);
     }
   };
 
-  const videoReadable = new MediaStreamTrackProcessor({ track: videoTrack }).readable;
-  const audioReadable = audioTrack ? new MediaStreamTrackProcessor({ track: audioTrack }).readable : null;
-  worker.postMessage(
-    { type: 'start', video: videoReadable, audio: audioReadable, encoderConfig },
-    audioReadable ? [videoReadable, audioReadable] : [videoReadable],
-  );
+  if (useTrackProcessor) {
+    const videoReadable = new MediaStreamTrackProcessor({ track: videoTrack }).readable;
+    const audioReadable = audioTrack ? new MediaStreamTrackProcessor({ track: audioTrack }).readable : null;
+    worker.postMessage(
+      { type: 'start', video: videoReadable, audio: audioReadable, encoderConfig },
+      audioReadable ? [videoReadable, audioReadable] : [videoReadable],
+    );
+  } else {
+    p.feeder = startFrameFeeder(videoTrack, audioTrack, worker);
+    worker.postMessage({ type: 'start', video: null, audio: null, encoderConfig, fps: q.fps });
+  }
 
   // O usuário clicou em "Parar de compartilhar" na barra do navegador.
   videoTrack.addEventListener('ended', () => { if (publisher === p) stopSharing(true); });
@@ -1073,10 +1084,53 @@ async function startPublishing(media, q) {
   render();
 }
 
+/**
+ * Caminho para navegadores sem MediaStreamTrackProcessor (ex.: Firefox no Linux): a captura toca num <video>
+ * escondido e cada quadro vira um VideoFrame quando o worker pede (no ritmo escolhido); o som passa por um
+ * AudioWorklet a 48 kHz.
+ */
+function startFrameFeeder(videoTrack, audioTrack, worker) {
+  const video = document.createElement('video');
+  video.muted = true;
+  video.playsInline = true;
+  video.srcObject = new MediaStream([videoTrack]);
+  video.play().catch(() => {});
+  const start = performance.now();
+  let ctx = null;
+  if (audioTrack && 'AudioWorkletNode' in window) {
+    try {
+      ctx = new AudioContext({ sampleRate: 48000 });
+      ctx.audioWorklet.addModule('audio-capture-worklet.js').then(() => {
+        if (!ctx) return;
+        const node = new AudioWorkletNode(ctx, 'gs-capture', { numberOfOutputs: 0, channelCount: 2, channelCountMode: 'explicit' });
+        node.port.onmessage = (e) => worker.postMessage({ type: 'pcm', data: e.data.data, timestamp: e.data.timestamp }, [e.data.data.buffer]);
+        ctx.createMediaStreamSource(new MediaStream([audioTrack])).connect(node);
+      }).catch((err) => console.warn('áudio do compartilhamento', err));
+    } catch (err) {
+      console.warn('áudio do compartilhamento', err);
+    }
+  }
+  return {
+    grab() {
+      if (video.readyState < 2 || !video.videoWidth) return;
+      try {
+        const frame = new VideoFrame(video, { timestamp: Math.round((performance.now() - start) * 1000) });
+        worker.postMessage({ type: 'frame', frame }, [frame]);
+      } catch { /* quadro ainda não disponível */ }
+    },
+    stop() {
+      video.srcObject = null;
+      ctx?.close();
+      ctx = null;
+    },
+  };
+}
+
 function stopSharing(notifyServer) {
   const p = publisher;
   if (!p) return;
   publisher = null;
+  p.feeder?.stop();
   p.worker.postMessage({ type: 'stop' });
   setTimeout(() => p.worker.terminate(), 500);
   for (const t of p.media.getTracks()) t.stop();
@@ -1084,7 +1138,14 @@ function stopSharing(notifyServer) {
   render();
 }
 
-$('shareBtn').onclick = () => (publisher ? stopSharing(true) : startSharing());
+$('shareBtn').onclick = () => {
+  if (publisher) { stopSharing(true); return; }
+  if (!SHARE_SUPPORTED) {
+    toast('Este navegador não consegue compartilhar a tela. Use o Chrome, o Edge, o Brave ou o Firefox atualizados, no computador.');
+    return;
+  }
+  startSharing();
+};
 
 // ---------- Início ----------
 
