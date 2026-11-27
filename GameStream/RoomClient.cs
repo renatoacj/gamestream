@@ -126,29 +126,38 @@ public sealed partial class RoomClient : IRoomSink, IDisposable
     public static RoomClient? TryCreate(string link, string name, out string error)
     {
         error = "Não reconheci isso como uma sala. Cole o código da sala (palavras-e-números) ou o link completo.";
+        if (!TryParse(link, out var origin, out var key, out var guid)) return null;
+        error = "";
+        return new RoomClient(origin, key, name, guid);
+    }
 
-        // Código fixo de uma sala salva ("nome-da-sala-<guid>"): o endereço é procurado depois, no ntfy.sh.
+    /// <summary>
+    /// Interpreta um código ou link de sala. Código fixo ("nome-da-sala-&lt;guid&gt;"): origin fica null (o endereço é
+    /// procurado no ntfy.sh) e guid vem preenchido. Código de palavras ou link: origin e key.
+    /// </summary>
+    public static bool TryParse(string link, out string? origin, out string key, out string? guid)
+    {
+        origin = null; key = ""; guid = null;
         var text = link.Trim().ToLowerInvariant().Replace(" ", "");
-        if (RoomIds.GuidFromCode(text) is { } guid)
+        if (RoomIds.GuidFromCode(text) is { } g)
         {
-            error = "";
-            return new RoomClient(null, RoomIds.ViewKey(guid), name, guid);
+            guid = g;
+            key = RoomIds.ViewKey(g);
+            return true;
         }
 
         // Código da sala → o mesmo endereço do link, com a senha curta no lugar da chave longa.
         if (CodePattern().Match(text) is { Success: true } code)
             link = $"https://{code.Groups[1].Value}.trycloudflare.com/?k={code.Groups[2].Value}";
 
-        if (!Uri.TryCreate(link.Trim(), UriKind.Absolute, out var uri)) return null;
-
-        var origin = uri.GetLeftPart(UriPartial.Authority).ToLowerInvariant();
-        var key = uri.Query.TrimStart('?').Split('&')
+        if (!Uri.TryCreate(link.Trim(), UriKind.Absolute, out var uri)) return false;
+        var o = uri.GetLeftPart(UriPartial.Authority).ToLowerInvariant();
+        var k = uri.Query.TrimStart('?').Split('&')
             .Select(p => p.Split('=', 2))
             .FirstOrDefault(p => p.Length == 2 && p[0] == "k")?[1] ?? "";
-        if (!OriginPattern().IsMatch(origin) || !KeyPattern().IsMatch(key)) return null;
-
-        error = "";
-        return new RoomClient(origin, key, name);
+        if (!OriginPattern().IsMatch(o) || !KeyPattern().IsMatch(k)) return false;
+        (origin, key) = (o, k);
+        return true;
     }
 
     private RoomClient(string? origin, string key, string name, string? guid = null)
