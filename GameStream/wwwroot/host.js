@@ -409,7 +409,14 @@ function avatar(name) {
 const shortDate = (at) => new Date(at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 
 /** Card de sala: avatar, nome, linha de detalhe, botão de apagar (some até passar o mouse) e a ação principal. */
-function roomCard({ name, detail, detailClass, open, action, onAction, primary, removeTitle, onRemove, removeDisabled }) {
+const BADGES = {
+  live: ['live', 'Ao vivo'],
+  open: ['open', 'Aberta'],
+  closed: ['closed', 'Fechada'],
+  offline: ['closed', 'Fora do ar'],
+};
+
+function roomCard({ name, detail, detailClass, open, action, onAction, primary, removeTitle, onRemove, removeDisabled, badge, badgeTitle }) {
   const card = document.createElement('div');
   card.className = 'room-card' + (open ? ' open' : '');
   const top = document.createElement('div');
@@ -421,7 +428,16 @@ function roomCard({ name, detail, detailClass, open, action, onAction, primary, 
   const sub = document.createElement('small');
   sub.className = detailClass || '';
   sub.textContent = sub.title = detail;
+  // Nome da sala, quem criou e, numa linha própria, o selo de estado (nada fica cortado).
   info.append(title, sub);
+  if (BADGES[badge]) {
+    // Selo de estado: "Ao vivo" (alguém transmitindo), "Aberta", "Fechada" ou "Fora do ar".
+    const tag = document.createElement('span');
+    tag.className = 'room-badge ' + BADGES[badge][0];
+    tag.textContent = BADGES[badge][1];
+    if (badgeTitle) tag.title = badgeTitle;
+    info.append(tag);
+  }
   const remove = document.createElement('button');
   remove.className = 'remove icon-btn ghost';
   remove.append(icon('trash'));
@@ -653,11 +669,14 @@ function renderView() {
   $('roomDown').hidden = !down;
   $('room').style.visibility = down ? 'hidden' : '';
   if (lobby) {
-    const key = JSON.stringify([myRooms(), recentRooms(), activeRoom()?.id, !!joined]);
+    const ownLive = lastStatus?.state === 'live' || lastStatus?.guestStreams > 0;
+    const key = JSON.stringify([myRooms(), recentRooms(), activeRoom()?.id, !!joined, ownLive]);
     if (key !== lobbyKey) {
+      const entering = !lobbyKey;
       lobbyKey = key;
       renderMyRooms();
       renderRecent();
+      if (entering) pollRecentStatus(true);   // acabou de abrir a tela de Salas: confere já
     }
   } else {
     lobbyKey = '';
@@ -781,8 +800,9 @@ function renderMyRooms() {
     const isOpen = open?.id === r.id;
     box.append(roomCard({
       name: r.name,
-      detail: isOpen ? 'Aberta agora' : `de ${myName() || 'você'}`,
-      detailClass: isOpen ? 'open-tag' : '',
+      detail: `de ${myName() || 'você'}`,
+      // A minha sala aberta: "Ao vivo" se alguém (eu ou um convidado) está transmitindo nela.
+      badge: !isOpen ? '' : lastStatus?.state === 'live' || lastStatus?.guestStreams > 0 ? 'live' : 'open',
       open: isOpen,
       primary: isOpen,
       action: isOpen ? 'Voltar para a sala' : 'Abrir',
@@ -928,6 +948,30 @@ function rememberRoom(code, label, title) {
   storeRooms([next, ...recentRooms().filter((r) => r.code !== code && !sameRoom(r))]);
 }
 
+// ---------- Salas recentes no ar? ----------
+// Com a tela de Salas aberta, o app pergunta a cada sala recente (a cada 30 s) se ela está aberta e se alguém está
+// transmitindo, para mostrar o selo "Ao vivo".
+let recentStatus = {};
+let recentStatusAt = 0;
+
+async function pollRecentStatus(force = false) {
+  const codes = recentRooms().map((r) => r.code).slice(0, 8);
+  if (!codes.length || $('lobby').hidden || document.hidden) return;
+  if (!force && Date.now() - recentStatusAt < 30_000) return;
+  recentStatusAt = Date.now();
+  try {
+    const res = await fetch(api('room-status'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ codes }),
+    });
+    if (!res.ok) return;
+    recentStatus = await res.json();
+    renderRecent();
+  } catch { /* app fechando */ }
+}
+setInterval(pollRecentStatus, 5000);
+
 function renderRecent() {
   const list = recentRooms();
   $('recentCard').hidden = !list.length;
@@ -938,6 +982,8 @@ function renderRecent() {
       // Em cima, o nome que o dono deu à sala; embaixo, quem criou e quando você entrou.
       name: r.title || titleFromCode(r.code) || (realName(r.label) ? `Sala de ${r.label}` : 'Sala'),
       detail: realName(r.label) ? `de ${r.label}` : 'Criador ainda não informado',
+      badge: recentStatus[r.code]?.state,
+      badgeTitle: recentStatus[r.code]?.people ? `${recentStatus[r.code].people} pessoa(s) na sala` : '',
       action: 'Entrar',
       onAction: () => joinRoom(r.code),
       removeTitle: 'Tirar da lista',

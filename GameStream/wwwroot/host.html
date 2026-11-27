@@ -141,6 +141,13 @@
   .room-card .info b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .room-card .info small { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .room-card .info small.open-tag { color: var(--ok); font-weight: 600; }
+  .room-badge { align-self: flex-start; margin-top: 4px; display: inline-flex; align-items: center; gap: 5px; padding: 1px 7px; border-radius: 999px;
+    font-size: 10.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
+  .room-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .room-badge.live { color: #fff; background: var(--live); }
+  .room-badge.live::before { background: #fff; animation: pulse 1.4s infinite; }
+  .room-badge.open { color: var(--ok); background: rgba(62, 207, 142, .12); }
+  .room-badge.closed { color: var(--muted); background: var(--panel-3); }
   .room-card .info small.open-tag::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); margin-right: 6px; vertical-align: 1px; }
   .room-card .remove { opacity: 0; width: 28px; height: 28px; }
   .room-card:hover .remove, .room-card .remove:focus-visible { opacity: 1; }

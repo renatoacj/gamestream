@@ -309,6 +309,33 @@ public sealed partial class StreamServer : IAsyncDisposable, IRoomSink
 
         MapHostApi(app);
         // O app de um convidado confere a chave antes de insistir na conexão: 204 = vale, 401 = código/link errado.
+        // Estado da sala para quem tem o código (lista de salas recentes de quem já entrou): aberta? alguém transmitindo?
+        app.MapGet("/api/peek", (HttpContext ctx) => CheckViewerKey(ctx.Request.Query["k"]) switch
+        {
+            KeyCheck.Ok => Results.Json(new
+            {
+                open = true,
+                live = !_streams.IsEmpty,
+                people = _people.Values.Count(p => !IsHiddenCompanion(p)),
+                title = AllowGuestShare ? RoomName : "",
+            }),
+            KeyCheck.Closed => Results.Json(new { open = false, live = false, people = 0, title = "" }),
+            _ => Results.Unauthorized(),
+        });
+
+        // Quem tenho na lista de salas recentes está no ar? (o app consulta a sala de cada amigo)
+        app.MapPost("/api/room-status", async (HttpContext ctx) =>
+        {
+            if (!IsHost(ctx)) return Results.Unauthorized();
+            var body = await ctx.Request.ReadFromJsonAsync<JsonObject>();
+            var codes = (body?["codes"] as JsonArray)?.Select(n => n?.GetValue<string>()).OfType<string>()
+                .Where(c => c.Length <= 200).Distinct().Take(8).ToArray() ?? [];
+            var results = await Task.WhenAll(codes.Select(RoomStatus.GetAsync));
+            var map = new JsonObject();
+            for (var i = 0; i < codes.Length; i++) map[codes[i]] = results[i];
+            return Results.Text(map.ToJsonString(), "application/json");
+        });
+
         // Versão do app desta sala (pública): quem entra pelo app avisa quando as versões são diferentes.
         app.MapGet("/api/version", () => Results.Json(new { version = AppVersion.Current }));
 
