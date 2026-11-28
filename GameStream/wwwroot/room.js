@@ -422,6 +422,8 @@ function render() {
 
   // Telas abertas (uma ou duas lado a lado)
   $('stage').hidden = !watched.length;
+  // A tela acabou (a pessoa parou de transmitir) com o vídeo em tela cheia: sai, senão sobra uma tela preta sem botões.
+  if (!watched.length && document.fullscreenElement) document.exitFullscreen().catch(() => {});
   $('panes').classList.toggle('two', watched.length > 1);
   for (const p of players.values()) p.updateLabel();
 
@@ -938,6 +940,10 @@ function toggleFullscreen() {
   else if (watched.length) $('stage').requestFullscreen().catch(() => {});
 }
 $('fullscreen').onclick = toggleFullscreen;
+// Esc sempre sai da tela cheia, mesmo se o foco estiver perdido.
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.fullscreenElement) document.exitFullscreen().catch(() => {});
+});
 
 // Controles sobre o vídeo: aparecem quando o mouse mexe e somem depois de alguns segundos parado
 // (o cursor também some). Enquanto o mouse está em cima de um controle, eles ficam.
