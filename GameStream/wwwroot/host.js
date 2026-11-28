@@ -1099,3 +1099,8 @@ try {
 refresh();
 setInterval(refresh, 1000);
 setInterval(updateMeter, 150);
+
+// Esc sempre sai da tela cheia da sala (o vídeo fica dentro do iframe; o foco pode estar aqui).
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.fullscreenElement) document.exitFullscreen().catch(() => {});
+});
